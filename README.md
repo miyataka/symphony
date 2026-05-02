@@ -34,6 +34,11 @@ help with the setup:
 > Set up Symphony for my repository based on
 > https://github.com/openai/symphony/blob/main/elixir/README.md
 
+### Option 3. Try the experimental Go + GitHub Projects implementation
+
+This fork also includes a Go implementation that uses GitHub Projects v2 as the tracker. See
+[go/README.md](go/README.md) for setup, configuration, and current limitations.
+
 ---
 
 ## License
