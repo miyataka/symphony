@@ -37,6 +37,9 @@ type TrackerConfig struct {
 	PriorityField       string   `yaml:"priority_field"`
 	Assignee            string   `yaml:"assignee"`
 	AllowedRepositories []string `yaml:"allowed_repositories"`
+	StartState          string   `yaml:"start_state"`
+	HandoffState        string   `yaml:"handoff_state"`
+	WorkpadMarker       string   `yaml:"workpad_marker"`
 	ActiveStates        []string `yaml:"active_states"`
 	TerminalStates      []string `yaml:"terminal_states"`
 }
@@ -133,6 +136,9 @@ func defaultConfig() Config {
 			OwnerType:      "user",
 			StatusField:    "Status",
 			PriorityField:  "Priority",
+			StartState:     "In Progress",
+			HandoffState:   "Human Review",
+			WorkpadMarker:  "## Codex Workpad",
 			ActiveStates:   []string{"Todo", "In Progress", "Rework", "Merging"},
 			TerminalStates: []string{"Done", "Closed", "Cancelled", "Canceled", "Duplicate"},
 		},
@@ -165,6 +171,15 @@ func (c *Config) Resolve() error {
 	}
 	if c.Tracker.StatusField == "" {
 		c.Tracker.StatusField = "Status"
+	}
+	if c.Tracker.StartState == "" {
+		c.Tracker.StartState = "In Progress"
+	}
+	if c.Tracker.HandoffState == "" {
+		c.Tracker.HandoffState = "Human Review"
+	}
+	if c.Tracker.WorkpadMarker == "" {
+		c.Tracker.WorkpadMarker = "## Codex Workpad"
 	}
 	if c.Polling.IntervalMS <= 0 {
 		c.Polling.IntervalMS = int((30 * time.Second) / time.Millisecond)
