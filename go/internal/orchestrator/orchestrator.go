@@ -103,6 +103,13 @@ func (s *Service) poll(ctx context.Context) error {
 		if !s.canDispatch(issue) {
 			continue
 		}
+		if s.todoState(issue.State) {
+			if err := s.updateIssueState(ctx, issue, s.cfg.Tracker.StartState); err != nil {
+				s.logger.Warn("failed to move issue to start state", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "state", s.cfg.Tracker.StartState, "error", err)
+				continue
+			}
+			issue.State = s.cfg.Tracker.StartState
+		}
 		s.dispatch(ctx, issue, 0)
 	}
 	return nil
@@ -152,8 +159,13 @@ func (s *Service) dispatch(parent context.Context, issue tracker.Issue, retryCou
 		delete(s.running, issue.ID)
 		s.mu.Unlock()
 
-		if err == nil || parent.Err() != nil {
+		if err == nil {
+			s.handleSuccessfulRun(parent, issue)
 			s.logger.Info("issue run completed", "issue_id", issue.ID, "issue_identifier", issue.Identifier)
+			return
+		}
+		if parent.Err() != nil {
+			s.logger.Info("issue run stopped", "issue_id", issue.ID, "issue_identifier", issue.Identifier)
 			return
 		}
 		delay := s.retryDelay(retryCount + 1)
@@ -171,6 +183,7 @@ func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) error {
 	if err != nil {
 		return err
 	}
+	s.upsertWorkpad(ctx, issue, workpadBody(issue, "Running", path, "Workspace prepared and agent execution started."))
 
 	for turn := 1; turn <= s.cfg.Agent.MaxTurns; turn++ {
 		if err := workspace.RunBefore(ctx, path, s.cfg.Hooks, issue, s.cfg.HookTimeout()); err != nil {
@@ -181,6 +194,7 @@ func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) error {
 			return err
 		}
 		workspace.RunAfter(ctx, path, s.cfg.Hooks, issue, s.cfg.HookTimeout())
+		s.upsertWorkpad(ctx, issue, workpadBody(issue, "Running", path, fmt.Sprintf("Completed turn %d.", turn)))
 
 		refreshed, active, err := s.refreshIssue(ctx, issue.ID)
 		if err != nil {
@@ -189,9 +203,31 @@ func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) error {
 		if !active {
 			return nil
 		}
+		if s.writeback() != nil {
+			return nil
+		}
 		issue = refreshed
 	}
 	return nil
+}
+
+func (s *Service) handleSuccessfulRun(ctx context.Context, issue tracker.Issue) {
+	refreshed, active, err := s.refreshIssue(ctx, issue.ID)
+	if err != nil {
+		s.logger.Warn("failed to refresh issue after run", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
+		return
+	}
+	if !active {
+		return
+	}
+	if s.cfg.Tracker.HandoffState != "" && !sameState(refreshed.State, s.cfg.Tracker.HandoffState) {
+		if err := s.updateIssueState(ctx, refreshed, s.cfg.Tracker.HandoffState); err != nil {
+			s.logger.Warn("failed to move issue to handoff state", "issue_id", refreshed.ID, "issue_identifier", refreshed.Identifier, "state", s.cfg.Tracker.HandoffState, "error", err)
+			return
+		}
+		refreshed.State = s.cfg.Tracker.HandoffState
+	}
+	s.upsertWorkpad(ctx, refreshed, workpadBody(refreshed, "Human Review", "", "Agent run completed and issue is ready for review."))
 }
 
 func (s *Service) runAgentTurn(parent context.Context, path string, issue tracker.Issue, turn int) error {
@@ -309,6 +345,35 @@ func (s *Service) activeState(state string) bool {
 	return false
 }
 
+func (s *Service) todoState(state string) bool {
+	return sameState(state, "Todo")
+}
+
+func (s *Service) writeback() tracker.Writeback {
+	if writeback, ok := s.tracker.(tracker.Writeback); ok {
+		return writeback
+	}
+	return nil
+}
+
+func (s *Service) updateIssueState(ctx context.Context, issue tracker.Issue, state string) error {
+	writeback := s.writeback()
+	if writeback == nil {
+		return nil
+	}
+	return writeback.UpdateIssueState(ctx, issue, state)
+}
+
+func (s *Service) upsertWorkpad(ctx context.Context, issue tracker.Issue, body string) {
+	writeback := s.writeback()
+	if writeback == nil {
+		return
+	}
+	if err := writeback.UpsertWorkpad(ctx, issue, body); err != nil {
+		s.logger.Warn("failed to upsert workpad", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
+	}
+}
+
 func (s *Service) limitForState(state string) int {
 	if s.cfg.Agent.MaxConcurrentAgentsByState == nil {
 		return s.cfg.Agent.MaxConcurrentAgents
@@ -373,4 +438,30 @@ func sortIssues(issues []tracker.Issue) {
 
 func normalize(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func sameState(left, right string) bool {
+	return normalize(left) == normalize(right)
+}
+
+func workpadBody(issue tracker.Issue, status, workspacePath, note string) string {
+	lines := []string{
+		"## Codex Workpad",
+		"",
+		"### Status",
+		"",
+		"- Issue: " + issue.Identifier,
+		"- State: " + status,
+		"- Repository: " + issue.RepositoryNameWithOwner,
+	}
+	if workspacePath != "" {
+		lines = append(lines, "- Workspace: "+workspacePath)
+	}
+	lines = append(lines,
+		"",
+		"### Notes",
+		"",
+		"- "+note,
+	)
+	return strings.Join(lines, "\n")
 }

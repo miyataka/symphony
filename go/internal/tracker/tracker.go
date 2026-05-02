@@ -7,6 +7,7 @@ import (
 
 type Issue struct {
 	ID                      string
+	ProjectItemID           string
 	Identifier              string
 	Title                   string
 	Description             string
@@ -33,6 +34,11 @@ type Tracker interface {
 	FetchCandidateIssues(context.Context) ([]Issue, error)
 	FetchIssuesByStates(context.Context, []string) ([]Issue, error)
 	FetchIssueStatesByIDs(context.Context, []string) ([]Issue, error)
+}
+
+type Writeback interface {
+	UpdateIssueState(context.Context, Issue, string) error
+	UpsertWorkpad(context.Context, Issue, string) error
 }
 
 func (i Issue) Env() []string {
