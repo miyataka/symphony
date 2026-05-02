@@ -2,10 +2,13 @@ package githubtracker
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/miyataka/symphony/go/internal/tracker"
 	"github.com/miyataka/symphony/go/internal/workflow"
 )
 
@@ -98,6 +101,135 @@ func TestFetchIssuesByStatesNormalizesProjectIssues(t *testing.T) {
 	}
 	if len(issue.Labels) != 1 || issue.Labels[0] != "symphony" {
 		t.Fatalf("unexpected labels: %#v", issue.Labels)
+	}
+}
+
+func TestUpdateIssueState(t *testing.T) {
+	var sawMutation bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(payload.Query, "SymphonyGitHubUserProjectMetadata"):
+			_, _ = w.Write([]byte(`{
+				"data": {"user": {"projectV2": {
+					"id": "PVT_1",
+					"fields": {"nodes": [{
+						"__typename": "ProjectV2SingleSelectField",
+						"id": "FIELD_STATUS",
+						"name": "Status",
+						"options": [{"id": "OPT_REVIEW", "name": "Human Review"}]
+					}]}
+				}}}
+			}`))
+		case strings.Contains(payload.Query, "SymphonyUpdateProjectStatus"):
+			sawMutation = true
+			if payload.Variables["projectId"] != "PVT_1" {
+				t.Fatalf("unexpected project id: %#v", payload.Variables)
+			}
+			if payload.Variables["itemId"] != "ITEM_1" {
+				t.Fatalf("unexpected item id: %#v", payload.Variables)
+			}
+			if payload.Variables["fieldId"] != "FIELD_STATUS" {
+				t.Fatalf("unexpected field id: %#v", payload.Variables)
+			}
+			if payload.Variables["optionId"] != "OPT_REVIEW" {
+				t.Fatalf("unexpected option id: %#v", payload.Variables)
+			}
+			_, _ = w.Write([]byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"ITEM_1"}}}}`))
+		default:
+			t.Fatalf("unexpected query: %s", payload.Query)
+		}
+	}))
+	defer server.Close()
+
+	client, err := New(workflow.TrackerConfig{
+		Token:         "token",
+		Endpoint:      server.URL,
+		Owner:         "miyataka",
+		OwnerType:     "user",
+		ProjectNumber: 1,
+		StatusField:   "Status",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.UpdateIssueState(context.Background(), trackerIssue("I_1", "ITEM_1"), "Human Review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sawMutation {
+		t.Fatal("expected update mutation")
+	}
+}
+
+func TestUpsertWorkpadCreatesAndUpdatesComment(t *testing.T) {
+	var added, updated bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(payload.Query, "SymphonyIssueComments") && !added:
+			_, _ = w.Write([]byte(`{"data":{"node":{"comments":{"nodes":[]}}}}`))
+		case strings.Contains(payload.Query, "SymphonyAddWorkpad"):
+			added = true
+			if !strings.Contains(payload.Variables["body"].(string), "## Codex Workpad") {
+				t.Fatalf("missing marker in body: %#v", payload.Variables)
+			}
+			_, _ = w.Write([]byte(`{"data":{"addComment":{"commentEdge":{"node":{"id":"COMMENT_1"}}}}}`))
+		case strings.Contains(payload.Query, "SymphonyIssueComments"):
+			_, _ = w.Write([]byte(`{"data":{"node":{"comments":{"nodes":[{"id":"COMMENT_1","body":"## Codex Workpad\nold"}]}}}}`))
+		case strings.Contains(payload.Query, "SymphonyUpdateWorkpad"):
+			updated = true
+			if payload.Variables["id"] != "COMMENT_1" {
+				t.Fatalf("unexpected comment id: %#v", payload.Variables)
+			}
+			_, _ = w.Write([]byte(`{"data":{"updateIssueComment":{"issueComment":{"id":"COMMENT_1"}}}}`))
+		default:
+			t.Fatalf("unexpected query: %s", payload.Query)
+		}
+	}))
+	defer server.Close()
+
+	client, err := New(workflow.TrackerConfig{
+		Token:         "token",
+		Endpoint:      server.URL,
+		Owner:         "miyataka",
+		OwnerType:     "user",
+		ProjectNumber: 1,
+		WorkpadMarker: "## Codex Workpad",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.UpsertWorkpad(context.Background(), trackerIssue("I_1", "ITEM_1"), "first body"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.UpsertWorkpad(context.Background(), trackerIssue("I_1", "ITEM_1"), "second body"); err != nil {
+		t.Fatal(err)
+	}
+	if !added || !updated {
+		t.Fatalf("expected add and update, added=%t updated=%t", added, updated)
+	}
+}
+
+func trackerIssue(id, itemID string) tracker.Issue {
+	return tracker.Issue{
+		ID:            id,
+		ProjectItemID: itemID,
+		Identifier:    "miyataka/symphony#1",
 	}
 }
 

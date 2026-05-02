@@ -208,6 +208,7 @@ func (c *Client) normalizeItem(item projectItem) (tracker.Issue, bool) {
 
 	return tracker.Issue{
 		ID:                      item.Content.ID,
+		ProjectItemID:           item.ID,
 		Identifier:              item.Content.Identifier(),
 		Title:                   item.Content.Title,
 		Description:             item.Content.Body,
@@ -223,6 +224,133 @@ func (c *Client) normalizeItem(item projectItem) (tracker.Issue, bool) {
 		CreatedAt:               createdAt,
 		UpdatedAt:               updatedAt,
 	}, true
+}
+
+func (c *Client) UpdateIssueState(ctx context.Context, issue tracker.Issue, stateName string) error {
+	if issue.ProjectItemID == "" {
+		return errors.New("issue project item id is required")
+	}
+	metadata, err := c.fetchProjectMetadata(ctx)
+	if err != nil {
+		return err
+	}
+	optionID := metadata.statusOptionID(stateName)
+	if optionID == "" {
+		return fmt.Errorf("status option %q not found on field %q", stateName, c.cfg.StatusField)
+	}
+
+	var response graphQLMutationResponse
+	if err := c.graphql(ctx, updateProjectItemFieldValueMutation, map[string]any{
+		"projectId": metadata.ProjectID,
+		"itemId":    issue.ProjectItemID,
+		"fieldId":   metadata.StatusFieldID,
+		"optionId":  optionID,
+	}, &response); err != nil {
+		return err
+	}
+	return response.err()
+}
+
+func (c *Client) UpsertWorkpad(ctx context.Context, issue tracker.Issue, body string) error {
+	if issue.ID == "" {
+		return errors.New("issue id is required")
+	}
+	marker := c.cfg.WorkpadMarker
+	if marker == "" {
+		marker = "## Codex Workpad"
+	}
+	if !strings.Contains(body, marker) {
+		body = marker + "\n\n" + strings.TrimSpace(body)
+	}
+
+	commentID, err := c.findWorkpadCommentID(ctx, issue.ID, marker)
+	if err != nil {
+		return err
+	}
+
+	var response graphQLMutationResponse
+	if commentID == "" {
+		if err := c.graphql(ctx, addCommentMutation, map[string]any{
+			"subjectId": issue.ID,
+			"body":      body,
+		}, &response); err != nil {
+			return err
+		}
+		return response.err()
+	}
+
+	if err := c.graphql(ctx, updateIssueCommentMutation, map[string]any{
+		"id":   commentID,
+		"body": body,
+	}, &response); err != nil {
+		return err
+	}
+	return response.err()
+}
+
+func (c *Client) findWorkpadCommentID(ctx context.Context, issueID, marker string) (string, error) {
+	var response issueCommentsResponse
+	if err := c.graphql(ctx, issueCommentsQuery, map[string]any{"id": issueID}, &response); err != nil {
+		return "", err
+	}
+	if len(response.Errors) > 0 {
+		return "", fmt.Errorf("github graphql: %s", response.Errors[0].Message)
+	}
+	for _, comment := range response.Data.Node.Comments.Nodes {
+		if strings.Contains(comment.Body, marker) {
+			return comment.ID, nil
+		}
+	}
+	return "", nil
+}
+
+type projectMetadata struct {
+	ProjectID     string
+	StatusFieldID string
+	StatusOptions map[string]string
+}
+
+func (m projectMetadata) statusOptionID(name string) string {
+	return m.StatusOptions[normalize(name)]
+}
+
+func (c *Client) fetchProjectMetadata(ctx context.Context) (projectMetadata, error) {
+	query := organizationProjectMetadataQuery
+	if c.cfg.OwnerType == "user" {
+		query = userProjectMetadataQuery
+	}
+	var response projectMetadataResponse
+	if err := c.graphql(ctx, query, map[string]any{
+		"login":  c.cfg.Owner,
+		"number": c.cfg.ProjectNumber,
+	}, &response); err != nil {
+		return projectMetadata{}, err
+	}
+	if len(response.Errors) > 0 {
+		return projectMetadata{}, fmt.Errorf("github graphql: %s", response.Errors[0].Message)
+	}
+	project := response.Data.Organization.Project
+	if c.cfg.OwnerType == "user" {
+		project = response.Data.User.Project
+	}
+	if project.ID == "" {
+		return projectMetadata{}, errors.New("project not found")
+	}
+	for _, field := range project.Fields.Nodes {
+		if field.Typename != "ProjectV2SingleSelectField" || field.Name != c.cfg.StatusField {
+			continue
+		}
+		options := make(map[string]string, len(field.Options))
+		for _, option := range field.Options {
+			options[normalize(option.Name)] = option.ID
+		}
+		return projectMetadata{
+			ProjectID:     project.ID,
+			StatusFieldID: field.ID,
+			StatusOptions: options,
+		}, nil
+	}
+	return projectMetadata{}, fmt.Errorf("status field %q not found", c.cfg.StatusField)
 }
 
 func (c *Client) repositoryAllowed(nameWithOwner string) bool {
@@ -279,6 +407,64 @@ type graphQLResponse struct {
 	Errors []struct {
 		Message string `json:"message"`
 	} `json:"errors"`
+}
+
+type graphQLMutationResponse struct {
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+func (r graphQLMutationResponse) err() error {
+	if len(r.Errors) == 0 {
+		return nil
+	}
+	return fmt.Errorf("github graphql: %s", r.Errors[0].Message)
+}
+
+type issueCommentsResponse struct {
+	Data struct {
+		Node struct {
+			Comments struct {
+				Nodes []struct {
+					ID   string `json:"id"`
+					Body string `json:"body"`
+				} `json:"nodes"`
+			} `json:"comments"`
+		} `json:"node"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type projectMetadataResponse struct {
+	Data struct {
+		Organization struct {
+			Project projectMetadataProject `json:"projectV2"`
+		} `json:"organization"`
+		User struct {
+			Project projectMetadataProject `json:"projectV2"`
+		} `json:"user"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type projectMetadataProject struct {
+	ID     string `json:"id"`
+	Fields struct {
+		Nodes []struct {
+			Typename string `json:"__typename"`
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			Options  []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"options"`
+		} `json:"nodes"`
+	} `json:"fields"`
 }
 
 type project struct {
@@ -476,6 +662,70 @@ query SymphonyGitHubUserProject($login: String!, $number: Int!, $after: String) 
     }
   }
 }`, projectItemFields)
+
+const projectMetadataFields = `
+id
+fields(first: 50) {
+  nodes {
+    __typename
+    ... on ProjectV2SingleSelectField {
+      id
+      name
+      options { id name }
+    }
+  }
+}`
+
+var organizationProjectMetadataQuery = fmt.Sprintf(`
+query SymphonyGitHubProjectMetadata($login: String!, $number: Int!) {
+  organization(login: $login) {
+    projectV2(number: $number) { %s }
+  }
+}`, projectMetadataFields)
+
+var userProjectMetadataQuery = fmt.Sprintf(`
+query SymphonyGitHubUserProjectMetadata($login: String!, $number: Int!) {
+  user(login: $login) {
+    projectV2(number: $number) { %s }
+  }
+}`, projectMetadataFields)
+
+const updateProjectItemFieldValueMutation = `
+mutation SymphonyUpdateProjectStatus($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+  updateProjectV2ItemFieldValue(input: {
+    projectId: $projectId,
+    itemId: $itemId,
+    fieldId: $fieldId,
+    value: { singleSelectOptionId: $optionId }
+  }) {
+    projectV2Item { id }
+  }
+}`
+
+const issueCommentsQuery = `
+query SymphonyIssueComments($id: ID!) {
+  node(id: $id) {
+    ... on Issue {
+      comments(first: 100) {
+        nodes { id body }
+      }
+    }
+  }
+}`
+
+const addCommentMutation = `
+mutation SymphonyAddWorkpad($subjectId: ID!, $body: String!) {
+  addComment(input: { subjectId: $subjectId, body: $body }) {
+    commentEdge { node { id } }
+  }
+}`
+
+const updateIssueCommentMutation = `
+mutation SymphonyUpdateWorkpad($id: ID!, $body: String!) {
+  updateIssueComment(input: { id: $id, body: $body }) {
+    issueComment { id }
+  }
+}`
 
 func normalizedSet(values []string) map[string]struct{} {
 	out := make(map[string]struct{}, len(values))

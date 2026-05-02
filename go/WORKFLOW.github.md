@@ -9,6 +9,9 @@ tracker:
   priority_field: Priority
   allowed_repositories:
     - miyataka/symphony
+  start_state: In Progress
+  handoff_state: Human Review
+  workpad_marker: "## Codex Workpad"
   active_states:
     - Todo
     - In Progress

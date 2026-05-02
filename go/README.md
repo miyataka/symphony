@@ -17,6 +17,7 @@ tracker.
 5. Writes the rendered prompt to `.symphony/prompt.md`
 6. Runs `agent.command` inside the workspace with issue metadata in environment variables
 7. Reconciles running work against GitHub Project status and retries failed runs with backoff
+8. Updates GitHub Project status and a persistent `## Codex Workpad` issue comment when possible
 
 ## Requirements
 
@@ -54,6 +55,9 @@ tracker:
   allowed_repositories:
     - miyataka/api
     - miyataka/frontend
+  start_state: In Progress
+  handoff_state: Human Review
+  workpad_marker: "## Codex Workpad"
   active_states: [Todo, In Progress, Rework, Merging]
   terminal_states: [Done, Closed, Cancelled, Canceled, Duplicate]
 workspace:
@@ -90,6 +94,17 @@ Repository: {{ .Issue.RepositoryNameWithOwner }}
 - `SYMPHONY_PROMPT_FILE` for `agent.command`
 - `SYMPHONY_TURN` for `agent.command`
 
+## GitHub writeback
+
+When the tracker supports writeback, Symphony updates the configured `status_field`:
+
+- `Todo` items move to `tracker.start_state` before dispatch
+- successful active runs move to `tracker.handoff_state`
+
+It also creates or updates one issue comment containing `tracker.workpad_marker`, defaulting to
+`## Codex Workpad`. This comment is the handoff surface for workspace path, status, and execution
+notes.
+
 ## Testing
 
 ```bash
@@ -99,7 +114,6 @@ make all
 ## Current limitations
 
 - GitHub issue dependencies are not yet normalized into `Issue.BlockedBy`.
-- The GitHub adapter polls Project v2 items; it does not write project fields, issue comments, or
-  PR links. Those actions should be performed by `agent.command` or repo-local tooling.
+- The GitHub adapter does not yet attach PR links or run PR feedback sweeps.
 - The Codex app-server JSON-RPC protocol is not implemented yet. Use `agent.command` as the bridge
   to Codex or another coding agent.
