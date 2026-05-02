@@ -27,21 +27,23 @@ type Config struct {
 }
 
 type TrackerConfig struct {
-	Kind                string   `yaml:"kind"`
-	Token               string   `yaml:"token"`
-	Endpoint            string   `yaml:"endpoint"`
-	Owner               string   `yaml:"owner"`
-	OwnerType           string   `yaml:"owner_type"`
-	ProjectNumber       int      `yaml:"project_number"`
-	StatusField         string   `yaml:"status_field"`
-	PriorityField       string   `yaml:"priority_field"`
-	Assignee            string   `yaml:"assignee"`
-	AllowedRepositories []string `yaml:"allowed_repositories"`
-	StartState          string   `yaml:"start_state"`
-	HandoffState        string   `yaml:"handoff_state"`
-	WorkpadMarker       string   `yaml:"workpad_marker"`
-	ActiveStates        []string `yaml:"active_states"`
-	TerminalStates      []string `yaml:"terminal_states"`
+	Kind                  string   `yaml:"kind"`
+	Token                 string   `yaml:"token"`
+	Endpoint              string   `yaml:"endpoint"`
+	RestEndpoint          string   `yaml:"rest_endpoint"`
+	Owner                 string   `yaml:"owner"`
+	OwnerType             string   `yaml:"owner_type"`
+	ProjectNumber         int      `yaml:"project_number"`
+	StatusField           string   `yaml:"status_field"`
+	PriorityField         string   `yaml:"priority_field"`
+	Assignee              string   `yaml:"assignee"`
+	AllowedRepositories   []string `yaml:"allowed_repositories"`
+	StartState            string   `yaml:"start_state"`
+	HandoffState          string   `yaml:"handoff_state"`
+	WorkpadMarker         string   `yaml:"workpad_marker"`
+	ReadIssueDependencies bool     `yaml:"read_issue_dependencies"`
+	ActiveStates          []string `yaml:"active_states"`
+	TerminalStates        []string `yaml:"terminal_states"`
 }
 
 type PollingConfig struct {
@@ -130,17 +132,19 @@ func ParseConfig(raw map[string]any) (Config, error) {
 func defaultConfig() Config {
 	return Config{
 		Tracker: TrackerConfig{
-			Kind:           "github",
-			Token:          "$GITHUB_TOKEN",
-			Endpoint:       "https://api.github.com/graphql",
-			OwnerType:      "user",
-			StatusField:    "Status",
-			PriorityField:  "Priority",
-			StartState:     "In Progress",
-			HandoffState:   "Human Review",
-			WorkpadMarker:  "## Codex Workpad",
-			ActiveStates:   []string{"Todo", "In Progress", "Rework", "Merging"},
-			TerminalStates: []string{"Done", "Closed", "Cancelled", "Canceled", "Duplicate"},
+			Kind:                  "github",
+			Token:                 "$GITHUB_TOKEN",
+			Endpoint:              "https://api.github.com/graphql",
+			RestEndpoint:          "https://api.github.com",
+			OwnerType:             "user",
+			StatusField:           "Status",
+			PriorityField:         "Priority",
+			StartState:            "In Progress",
+			HandoffState:          "Human Review",
+			WorkpadMarker:         "## Codex Workpad",
+			ReadIssueDependencies: true,
+			ActiveStates:          []string{"Todo", "In Progress", "Rework", "Merging"},
+			TerminalStates:        []string{"Done", "Closed", "Cancelled", "Canceled", "Duplicate"},
 		},
 		Polling: PollingConfig{IntervalMS: int((30 * time.Second) / time.Millisecond)},
 		Workspace: WorkspaceConfig{
@@ -168,6 +172,9 @@ func (c *Config) Resolve() error {
 	}
 	if c.Tracker.Endpoint == "" {
 		c.Tracker.Endpoint = "https://api.github.com/graphql"
+	}
+	if c.Tracker.RestEndpoint == "" {
+		c.Tracker.RestEndpoint = deriveRestEndpoint(c.Tracker.Endpoint)
 	}
 	if c.Tracker.StatusField == "" {
 		c.Tracker.StatusField = "Status"
@@ -218,6 +225,14 @@ func (c *Config) Resolve() error {
 		return errors.New("tracker.project_number is required")
 	}
 	return nil
+}
+
+func deriveRestEndpoint(graphQLEndpoint string) string {
+	endpoint := strings.TrimRight(strings.TrimSpace(graphQLEndpoint), "/")
+	if endpoint == "" || endpoint == "https://api.github.com/graphql" {
+		return "https://api.github.com"
+	}
+	return strings.TrimSuffix(endpoint, "/graphql")
 }
 
 func normalizeList(values []string) []string {

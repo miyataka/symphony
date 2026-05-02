@@ -47,6 +47,12 @@ func TestParseConfigResolvesEnvAndDefaults(t *testing.T) {
 	if cfg.Tracker.StatusField != "Status" {
 		t.Fatalf("unexpected status field: %q", cfg.Tracker.StatusField)
 	}
+	if cfg.Tracker.RestEndpoint != "https://api.github.com" {
+		t.Fatalf("unexpected rest endpoint: %q", cfg.Tracker.RestEndpoint)
+	}
+	if !cfg.Tracker.ReadIssueDependencies {
+		t.Fatal("expected issue dependency reads to default on")
+	}
 	if len(cfg.Tracker.AllowedRepositories) != 2 ||
 		cfg.Tracker.AllowedRepositories[0] != "miyataka/api" ||
 		cfg.Tracker.AllowedRepositories[1] != "miyataka/frontend" {

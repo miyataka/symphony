@@ -24,6 +24,7 @@ tracker.
 - Go 1.23+
 - A GitHub token with access to the target Project v2 and its issues
 - `read:project` permission for classic PATs, or equivalent fine-grained project access
+- `Issues: read` permission when `tracker.read_issue_dependencies` is enabled
 
 ## Run
 
@@ -58,6 +59,7 @@ tracker:
   start_state: In Progress
   handoff_state: Human Review
   workpad_marker: "## Codex Workpad"
+  read_issue_dependencies: true
   active_states: [Todo, In Progress, Rework, Merging]
   terminal_states: [Done, Closed, Cancelled, Canceled, Duplicate]
 workspace:
@@ -105,6 +107,12 @@ It also creates or updates one issue comment containing `tracker.workpad_marker`
 `## Codex Workpad`. This comment is the handoff surface for workspace path, status, and execution
 notes.
 
+## Issue dependencies
+
+When `tracker.read_issue_dependencies` is true, Symphony reads GitHub issue dependencies through
+the REST API and populates `.Issue.BlockedBy` with open blockers. Issues with open blockers are not
+dispatched.
+
 ## Testing
 
 ```bash
@@ -113,7 +121,6 @@ make all
 
 ## Current limitations
 
-- GitHub issue dependencies are not yet normalized into `Issue.BlockedBy`.
 - The GitHub adapter does not yet attach PR links or run PR feedback sweeps.
 - The Codex app-server JSON-RPC protocol is not implemented yet. Use `agent.command` as the bridge
   to Codex or another coding agent.

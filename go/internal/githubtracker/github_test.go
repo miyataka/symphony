@@ -3,6 +3,7 @@ package githubtracker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -311,4 +312,135 @@ func TestFetchIssuesByStatesFiltersAllowedRepositories(t *testing.T) {
 	if issues[0].RepositorySSHURL != "git@github.com:miyataka/api.git" {
 		t.Fatalf("unexpected fallback ssh url: %q", issues[0].RepositorySSHURL)
 	}
+}
+
+func TestFetchIssuesByStatesAddsOpenBlockers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			if r.URL.Path != "/repos/miyataka/api/issues/10/dependencies/blocked_by" {
+				t.Fatalf("unexpected dependency path: %s", r.URL.String())
+			}
+			_, _ = w.Write([]byte(`[
+				{
+					"node_id": "I_BLOCKER_OPEN",
+					"number": 9,
+					"state": "open",
+					"title": "Open blocker",
+					"html_url": "https://github.com/miyataka/api/issues/9"
+				},
+				{
+					"node_id": "I_BLOCKER_CLOSED",
+					"number": 8,
+					"state": "closed",
+					"title": "Closed blocker",
+					"html_url": "https://github.com/miyataka/api/issues/8"
+				}
+			]`))
+			return
+		}
+		writeProjectIssueFixture(w, "miyataka/api", 10)
+	}))
+	defer server.Close()
+
+	client, err := New(workflow.TrackerConfig{
+		Token:                 "token",
+		Endpoint:              server.URL,
+		RestEndpoint:          server.URL,
+		Owner:                 "miyataka",
+		OwnerType:             "user",
+		ProjectNumber:         1,
+		StatusField:           "Status",
+		ActiveStates:          []string{"Todo"},
+		TerminalStates:        []string{"Done"},
+		ReadIssueDependencies: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues, err := client.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected one issue, got %d", len(issues))
+	}
+	if len(issues[0].BlockedBy) != 1 {
+		t.Fatalf("expected one open blocker, got %#v", issues[0].BlockedBy)
+	}
+	blocker := issues[0].BlockedBy[0]
+	if blocker.ID != "I_BLOCKER_OPEN" || blocker.Identifier != "miyataka/api#9" || blocker.State != "open" {
+		t.Fatalf("unexpected blocker: %#v", blocker)
+	}
+}
+
+func TestFetchIssuesByStatesCanSkipIssueDependencies(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			t.Fatalf("did not expect dependency request")
+		}
+		writeProjectIssueFixture(w, "miyataka/api", 10)
+	}))
+	defer server.Close()
+
+	client, err := New(workflow.TrackerConfig{
+		Token:                 "token",
+		Endpoint:              server.URL,
+		RestEndpoint:          server.URL,
+		Owner:                 "miyataka",
+		OwnerType:             "user",
+		ProjectNumber:         1,
+		StatusField:           "Status",
+		ActiveStates:          []string{"Todo"},
+		TerminalStates:        []string{"Done"},
+		ReadIssueDependencies: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues, err := client.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected one issue, got %d", len(issues))
+	}
+	if len(issues[0].BlockedBy) != 0 {
+		t.Fatalf("expected no blockers, got %#v", issues[0].BlockedBy)
+	}
+}
+
+func writeProjectIssueFixture(w http.ResponseWriter, repository string, number int) {
+	_, _ = fmt.Fprintf(w, `{
+		"data": {
+			"user": {
+				"projectV2": {
+					"items": {
+						"nodes": [{
+							"id": "PVTI_1",
+							"content": {
+								"__typename": "Issue",
+								"id": "I_1",
+								"number": %d,
+								"title": "Implement thing",
+								"body": "Body text",
+								"url": "https://github.com/%s/issues/%d",
+								"state": "OPEN",
+								"createdAt": "2026-05-01T00:00:00Z",
+								"updatedAt": "2026-05-01T00:01:00Z",
+								"repository": {"nameWithOwner": "%s", "url": "https://github.com/%s"},
+								"labels": {"nodes": []},
+								"assignees": {"nodes": []}
+							},
+							"fieldValues": {
+								"nodes": [{"__typename": "ProjectV2ItemFieldSingleSelectValue", "name": "Todo", "field": {"name": "Status"}}]
+							}
+						}],
+						"pageInfo": {"hasNextPage": false, "endCursor": null}
+					}
+				}
+			}
+		}
+	}`, number, repository, number, repository, repository)
 }

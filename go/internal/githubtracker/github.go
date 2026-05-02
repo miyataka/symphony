@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,10 +19,11 @@ import (
 )
 
 type Client struct {
-	endpoint string
-	token    string
-	cfg      workflow.TrackerConfig
-	http     *http.Client
+	endpoint     string
+	restEndpoint string
+	token        string
+	cfg          workflow.TrackerConfig
+	http         *http.Client
 }
 
 func New(cfg workflow.TrackerConfig) (*Client, error) {
@@ -31,6 +33,9 @@ func New(cfg workflow.TrackerConfig) (*Client, error) {
 	if cfg.Endpoint == "" {
 		cfg.Endpoint = "https://api.github.com/graphql"
 	}
+	if cfg.RestEndpoint == "" {
+		cfg.RestEndpoint = deriveRestEndpoint(cfg.Endpoint)
+	}
 	if cfg.StatusField == "" {
 		cfg.StatusField = "Status"
 	}
@@ -39,11 +44,20 @@ func New(cfg workflow.TrackerConfig) (*Client, error) {
 	}
 	cfg.AllowedRepositories = normalizeRepositoryList(cfg.AllowedRepositories)
 	return &Client{
-		endpoint: cfg.Endpoint,
-		token:    cfg.Token,
-		cfg:      cfg,
-		http:     &http.Client{Timeout: 30 * time.Second},
+		endpoint:     cfg.Endpoint,
+		restEndpoint: strings.TrimRight(cfg.RestEndpoint, "/"),
+		token:        cfg.Token,
+		cfg:          cfg,
+		http:         &http.Client{Timeout: 30 * time.Second},
 	}, nil
+}
+
+func deriveRestEndpoint(graphQLEndpoint string) string {
+	endpoint := strings.TrimRight(strings.TrimSpace(graphQLEndpoint), "/")
+	if endpoint == "" || endpoint == "https://api.github.com/graphql" {
+		return "https://api.github.com"
+	}
+	return strings.TrimSuffix(endpoint, "/graphql")
 }
 
 func normalizeRepositoryList(values []string) []string {
@@ -114,6 +128,13 @@ func (c *Client) FetchIssuesByStates(ctx context.Context, states []string) ([]tr
 			if !c.repositoryAllowed(issue.RepositoryNameWithOwner) {
 				continue
 			}
+			if c.cfg.ReadIssueDependencies {
+				blockers, err := c.fetchOpenIssueBlockers(ctx, item.Content)
+				if err != nil {
+					return nil, err
+				}
+				issue.BlockedBy = blockers
+			}
 			out = append(out, issue)
 		}
 		if !page.HasNextPage {
@@ -139,6 +160,71 @@ func (c *Client) FetchIssuesByStates(ctx context.Context, states []string) ([]tr
 		return left.Identifier < right.Identifier
 	})
 	return out, nil
+}
+
+func (c *Client) fetchOpenIssueBlockers(ctx context.Context, issue issueContent) ([]tracker.Blocker, error) {
+	if issue.Repository.NameWithOwner == "" || issue.Number == 0 {
+		return nil, nil
+	}
+	owner, repo, ok := strings.Cut(issue.Repository.NameWithOwner, "/")
+	if !ok || owner == "" || repo == "" {
+		return nil, nil
+	}
+
+	var out []tracker.Blocker
+	for page := 1; ; page++ {
+		var dependencies []issueDependency
+		path := fmt.Sprintf(
+			"%s/repos/%s/%s/issues/%d/dependencies/blocked_by?per_page=100&page=%d",
+			c.restEndpoint,
+			url.PathEscape(owner),
+			url.PathEscape(repo),
+			issue.Number,
+			page,
+		)
+		if err := c.restJSON(ctx, path, &dependencies); err != nil {
+			return nil, err
+		}
+		for _, dependency := range dependencies {
+			if strings.EqualFold(dependency.State, "closed") {
+				continue
+			}
+			out = append(out, tracker.Blocker{
+				ID:         dependency.NodeID,
+				Identifier: dependency.Identifier(),
+				State:      dependency.State,
+			})
+		}
+		if len(dependencies) < 100 {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (c *Client) restJSON(ctx context.Context, url string, dest any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	payload, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("github rest status %d: %s", resp.StatusCode, string(payload))
+	}
+	return json.Unmarshal(payload, dest)
 }
 
 type projectPage struct {
@@ -504,6 +590,25 @@ type issueContent struct {
 			Login string `json:"login"`
 		} `json:"nodes"`
 	} `json:"assignees"`
+}
+
+type issueDependency struct {
+	NodeID  string `json:"node_id"`
+	Number  int    `json:"number"`
+	State   string `json:"state"`
+	HTMLURL string `json:"html_url"`
+	Title   string `json:"title"`
+}
+
+func (d issueDependency) Identifier() string {
+	if d.HTMLURL == "" || d.Number == 0 {
+		return d.NodeID
+	}
+	parts := strings.Split(strings.TrimPrefix(d.HTMLURL, "https://github.com/"), "/")
+	if len(parts) < 4 {
+		return d.NodeID
+	}
+	return parts[0] + "/" + parts[1] + "#" + strconv.Itoa(d.Number)
 }
 
 func (i issueContent) Identifier() string {
