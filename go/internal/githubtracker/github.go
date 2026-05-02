@@ -37,12 +37,30 @@ func New(cfg workflow.TrackerConfig) (*Client, error) {
 	if cfg.OwnerType == "" {
 		cfg.OwnerType = "user"
 	}
+	cfg.AllowedRepositories = normalizeRepositoryList(cfg.AllowedRepositories)
 	return &Client{
 		endpoint: cfg.Endpoint,
 		token:    cfg.Token,
 		cfg:      cfg,
 		http:     &http.Client{Timeout: 30 * time.Second},
 	}, nil
+}
+
+func normalizeRepositoryList(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		normalized := normalize(value)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out
 }
 
 func (c *Client) FetchCandidateIssues(ctx context.Context) ([]tracker.Issue, error) {
@@ -91,6 +109,9 @@ func (c *Client) FetchIssuesByStates(ctx context.Context, states []string) ([]tr
 				continue
 			}
 			if c.cfg.Assignee != "" && !item.Content.HasAssignee(c.cfg.Assignee) {
+				continue
+			}
+			if !c.repositoryAllowed(issue.RepositoryNameWithOwner) {
 				continue
 			}
 			out = append(out, issue)
@@ -186,19 +207,35 @@ func (c *Client) normalizeItem(item projectItem) (tracker.Issue, bool) {
 	}
 
 	return tracker.Issue{
-		ID:          item.Content.ID,
-		Identifier:  item.Content.Identifier(),
-		Title:       item.Content.Title,
-		Description: item.Content.Body,
-		Priority:    priority,
-		State:       state,
-		BranchName:  item.Content.BranchName(),
-		URL:         item.Content.URL,
-		Labels:      labels,
-		BlockedBy:   nil,
-		CreatedAt:   createdAt,
-		UpdatedAt:   updatedAt,
+		ID:                      item.Content.ID,
+		Identifier:              item.Content.Identifier(),
+		Title:                   item.Content.Title,
+		Description:             item.Content.Body,
+		Priority:                priority,
+		State:                   state,
+		BranchName:              item.Content.BranchName(),
+		URL:                     item.Content.URL,
+		RepositoryNameWithOwner: item.Content.Repository.NameWithOwner,
+		RepositorySSHURL:        item.Content.Repository.CloneSSHURL(),
+		RepositoryHTMLURL:       item.Content.Repository.HTMLURL,
+		Labels:                  labels,
+		BlockedBy:               nil,
+		CreatedAt:               createdAt,
+		UpdatedAt:               updatedAt,
 	}, true
+}
+
+func (c *Client) repositoryAllowed(nameWithOwner string) bool {
+	if len(c.cfg.AllowedRepositories) == 0 {
+		return true
+	}
+	normalized := normalize(nameWithOwner)
+	for _, allowed := range c.cfg.AllowedRepositories {
+		if allowed == normalized {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) graphql(ctx context.Context, query string, variables map[string]any, dest any) error {
@@ -261,19 +298,17 @@ type projectItem struct {
 }
 
 type issueContent struct {
-	Typename   string `json:"__typename"`
-	ID         string `json:"id"`
-	Number     int    `json:"number"`
-	Title      string `json:"title"`
-	Body       string `json:"body"`
-	URL        string `json:"url"`
-	State      string `json:"state"`
-	CreatedAt  string `json:"createdAt"`
-	UpdatedAt  string `json:"updatedAt"`
-	Repository struct {
-		NameWithOwner string `json:"nameWithOwner"`
-	} `json:"repository"`
-	Labels struct {
+	Typename   string            `json:"__typename"`
+	ID         string            `json:"id"`
+	Number     int               `json:"number"`
+	Title      string            `json:"title"`
+	Body       string            `json:"body"`
+	URL        string            `json:"url"`
+	State      string            `json:"state"`
+	CreatedAt  string            `json:"createdAt"`
+	UpdatedAt  string            `json:"updatedAt"`
+	Repository repositoryContent `json:"repository"`
+	Labels     struct {
 		Nodes []struct {
 			Name string `json:"name"`
 		} `json:"nodes"`
@@ -307,6 +342,22 @@ func (i issueContent) HasAssignee(login string) bool {
 		}
 	}
 	return false
+}
+
+type repositoryContent struct {
+	NameWithOwner string `json:"nameWithOwner"`
+	SSHURL        string `json:"sshUrl"`
+	HTMLURL       string `json:"url"`
+}
+
+func (r repositoryContent) CloneSSHURL() string {
+	if r.SSHURL != "" {
+		return r.SSHURL
+	}
+	if r.NameWithOwner == "" {
+		return ""
+	}
+	return "git@github.com:" + r.NameWithOwner + ".git"
 }
 
 type fieldValueBucket struct {
@@ -387,7 +438,7 @@ content {
     state
     createdAt
     updatedAt
-    repository { nameWithOwner }
+    repository { nameWithOwner sshUrl url }
     labels(first: 25) { nodes { name } }
     assignees(first: 25) { nodes { login } }
   }

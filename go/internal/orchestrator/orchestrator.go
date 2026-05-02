@@ -221,12 +221,8 @@ func (s *Service) runAgentTurn(parent context.Context, path string, issue tracke
 	cmd.Env = append(os.Environ(),
 		"SYMPHONY_PROMPT_FILE="+promptPath,
 		"SYMPHONY_TURN="+fmt.Sprint(turn),
-		"SYMPHONY_ISSUE_ID="+issue.ID,
-		"SYMPHONY_ISSUE_IDENTIFIER="+issue.Identifier,
-		"SYMPHONY_ISSUE_TITLE="+issue.Title,
-		"SYMPHONY_ISSUE_URL="+issue.URL,
-		"SYMPHONY_ISSUE_STATE="+issue.State,
 	)
+	cmd.Env = append(cmd.Env, issue.Env()...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

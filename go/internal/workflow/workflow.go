@@ -27,17 +27,18 @@ type Config struct {
 }
 
 type TrackerConfig struct {
-	Kind           string   `yaml:"kind"`
-	Token          string   `yaml:"token"`
-	Endpoint       string   `yaml:"endpoint"`
-	Owner          string   `yaml:"owner"`
-	OwnerType      string   `yaml:"owner_type"`
-	ProjectNumber  int      `yaml:"project_number"`
-	StatusField    string   `yaml:"status_field"`
-	PriorityField  string   `yaml:"priority_field"`
-	Assignee       string   `yaml:"assignee"`
-	ActiveStates   []string `yaml:"active_states"`
-	TerminalStates []string `yaml:"terminal_states"`
+	Kind                string   `yaml:"kind"`
+	Token               string   `yaml:"token"`
+	Endpoint            string   `yaml:"endpoint"`
+	Owner               string   `yaml:"owner"`
+	OwnerType           string   `yaml:"owner_type"`
+	ProjectNumber       int      `yaml:"project_number"`
+	StatusField         string   `yaml:"status_field"`
+	PriorityField       string   `yaml:"priority_field"`
+	Assignee            string   `yaml:"assignee"`
+	AllowedRepositories []string `yaml:"allowed_repositories"`
+	ActiveStates        []string `yaml:"active_states"`
+	TerminalStates      []string `yaml:"terminal_states"`
 }
 
 type PollingConfig struct {
@@ -155,6 +156,7 @@ func (c *Config) Resolve() error {
 	c.Workspace.Root = expandPath(resolveEnv(c.Workspace.Root))
 	c.Tracker.Kind = strings.ToLower(strings.TrimSpace(c.Tracker.Kind))
 	c.Tracker.OwnerType = strings.ToLower(strings.TrimSpace(c.Tracker.OwnerType))
+	c.Tracker.AllowedRepositories = normalizeList(c.Tracker.AllowedRepositories)
 	if c.Tracker.OwnerType == "" {
 		c.Tracker.OwnerType = "user"
 	}
@@ -201,6 +203,23 @@ func (c *Config) Resolve() error {
 		return errors.New("tracker.project_number is required")
 	}
 	return nil
+}
+
+func normalizeList(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out
 }
 
 func (c Config) PollInterval() time.Duration {

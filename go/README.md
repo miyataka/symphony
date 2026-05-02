@@ -51,13 +51,16 @@ tracker:
   project_number: 1
   status_field: Status
   priority_field: Priority
+  allowed_repositories:
+    - miyataka/api
+    - miyataka/frontend
   active_states: [Todo, In Progress, Rework, Merging]
   terminal_states: [Done, Closed, Cancelled, Canceled, Duplicate]
 workspace:
   root: ~/code/symphony-workspaces
 hooks:
   after_create: |
-    git clone --depth 1 git@github.com:miyataka/symphony.git .
+    git clone --depth 1 "$SYMPHONY_REPOSITORY_SSH_URL" .
 agent:
   max_concurrent_agents: 4
   max_turns: 20
@@ -69,6 +72,7 @@ You are working on GitHub issue {{ .Issue.Identifier }}.
 
 Title: {{ .Issue.Title }}
 URL: {{ .Issue.URL }}
+Repository: {{ .Issue.RepositoryNameWithOwner }}
 
 {{ .Issue.Description }}
 ```
@@ -80,6 +84,9 @@ URL: {{ .Issue.URL }}
 - `SYMPHONY_ISSUE_TITLE`
 - `SYMPHONY_ISSUE_URL`
 - `SYMPHONY_ISSUE_STATE`
+- `SYMPHONY_REPOSITORY`
+- `SYMPHONY_REPOSITORY_SSH_URL`
+- `SYMPHONY_REPOSITORY_HTML_URL`
 - `SYMPHONY_PROMPT_FILE` for `agent.command`
 - `SYMPHONY_TURN` for `agent.command`
 

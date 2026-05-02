@@ -85,20 +85,10 @@ func runHook(parent context.Context, path, command string, issue tracker.Issue, 
 
 	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
 	cmd.Dir = path
-	cmd.Env = append(os.Environ(), issueEnv(issue)...)
+	cmd.Env = append(os.Environ(), issue.Env()...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
-}
-
-func issueEnv(issue tracker.Issue) []string {
-	return []string{
-		"SYMPHONY_ISSUE_ID=" + issue.ID,
-		"SYMPHONY_ISSUE_IDENTIFIER=" + issue.Identifier,
-		"SYMPHONY_ISSUE_TITLE=" + issue.Title,
-		"SYMPHONY_ISSUE_URL=" + issue.URL,
-		"SYMPHONY_ISSUE_STATE=" + issue.State,
-	}
 }
 
 var unsafeIdentifier = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
