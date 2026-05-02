@@ -113,6 +113,13 @@ When `tracker.read_issue_dependencies` is true, Symphony reads GitHub issue depe
 the REST API and populates `.Issue.BlockedBy` with open blockers. Issues with open blockers are not
 dispatched.
 
+## Linked pull requests
+
+Symphony also reads pull requests referenced by GitHub's `closedByPullRequestsReferences` field and
+exposes them through `.Issue.PullRequests`. Each PR includes review decision, merge state, status
+check rollup state, comment count, and unresolved review thread count so workflows can decide
+whether to hand off, rework, or wait.
+
 ## Testing
 
 ```bash

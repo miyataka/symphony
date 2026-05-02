@@ -20,6 +20,7 @@ type Issue struct {
 	RepositoryHTMLURL       string
 	Labels                  []string
 	BlockedBy               []Blocker
+	PullRequests            []PullRequest
 	CreatedAt               *time.Time
 	UpdatedAt               *time.Time
 }
@@ -28,6 +29,29 @@ type Blocker struct {
 	ID         string
 	Identifier string
 	State      string
+}
+
+type PullRequest struct {
+	ID                     string
+	Number                 int
+	Title                  string
+	URL                    string
+	State                  string
+	IsDraft                bool
+	ReviewDecision         string
+	MergeStateStatus       string
+	StatusCheckRollupState string
+	CommentCount           int
+	ReviewThreadCount      int
+	UnresolvedThreadCount  int
+}
+
+func (p PullRequest) HasActionableFeedback() bool {
+	return p.ReviewDecision == "CHANGES_REQUESTED" || p.UnresolvedThreadCount > 0
+}
+
+func (p PullRequest) ChecksPassing() bool {
+	return p.StatusCheckRollupState == "" || p.StatusCheckRollupState == "SUCCESS"
 }
 
 type Tracker interface {

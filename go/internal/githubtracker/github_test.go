@@ -105,6 +105,100 @@ func TestFetchIssuesByStatesNormalizesProjectIssues(t *testing.T) {
 	}
 }
 
+func TestFetchIssuesByStatesNormalizesLinkedPullRequests(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data": {
+				"user": {
+					"projectV2": {
+						"items": {
+							"nodes": [{
+								"id": "PVTI_1",
+								"content": {
+									"__typename": "Issue",
+									"id": "I_1",
+									"number": 42,
+									"title": "Implement thing",
+									"body": "Body text",
+									"url": "https://github.com/miyataka/symphony/issues/42",
+									"state": "OPEN",
+									"repository": {
+										"nameWithOwner": "miyataka/symphony",
+										"url": "https://github.com/miyataka/symphony"
+									},
+									"labels": {"nodes": []},
+									"assignees": {"nodes": []},
+									"closedByPullRequestsReferences": {
+										"nodes": [{
+											"id": "PR_1",
+											"number": 17,
+											"title": "Fix issue",
+											"url": "https://github.com/miyataka/symphony/pull/17",
+											"state": "OPEN",
+											"isDraft": false,
+											"reviewDecision": "CHANGES_REQUESTED",
+											"mergeStateStatus": "UNSTABLE",
+											"statusCheckRollup": {"state": "FAILURE"},
+											"comments": {"totalCount": 3},
+											"reviewThreads": {
+												"totalCount": 2,
+												"nodes": [{"isResolved": false}, {"isResolved": true}]
+											}
+										}]
+									}
+								},
+								"fieldValues": {
+									"nodes": [{"__typename": "ProjectV2ItemFieldSingleSelectValue", "name": "Todo", "field": {"name": "Status"}}]
+								}
+							}],
+							"pageInfo": {"hasNextPage": false, "endCursor": null}
+						}
+					}
+				}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := New(workflow.TrackerConfig{
+		Token:          "token",
+		Endpoint:       server.URL,
+		Owner:          "miyataka",
+		OwnerType:      "user",
+		ProjectNumber:  1,
+		StatusField:    "Status",
+		ActiveStates:   []string{"Todo"},
+		TerminalStates: []string{"Done"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues, err := client.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected one issue, got %d", len(issues))
+	}
+	if len(issues[0].PullRequests) != 1 {
+		t.Fatalf("expected one pull request, got %#v", issues[0].PullRequests)
+	}
+	pr := issues[0].PullRequests[0]
+	if pr.Number != 17 || pr.URL != "https://github.com/miyataka/symphony/pull/17" {
+		t.Fatalf("unexpected pull request: %#v", pr)
+	}
+	if !pr.HasActionableFeedback() {
+		t.Fatalf("expected actionable feedback: %#v", pr)
+	}
+	if pr.ChecksPassing() {
+		t.Fatalf("expected failing checks: %#v", pr)
+	}
+	if pr.UnresolvedThreadCount != 1 || pr.ReviewThreadCount != 2 || pr.CommentCount != 3 {
+		t.Fatalf("unexpected review/comment counts: %#v", pr)
+	}
+}
+
 func TestUpdateIssueState(t *testing.T) {
 	var sawMutation bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
