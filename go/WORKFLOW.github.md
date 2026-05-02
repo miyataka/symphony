@@ -7,6 +7,8 @@ tracker:
   project_number: 1
   status_field: Status
   priority_field: Priority
+  allowed_repositories:
+    - miyataka/symphony
   active_states:
     - Todo
     - In Progress
@@ -24,7 +26,7 @@ workspace:
   root: ~/code/symphony-workspaces
 hooks:
   after_create: |
-    git clone --depth 1 git@github.com:miyataka/symphony.git .
+    git clone --depth 1 "$SYMPHONY_REPOSITORY_SSH_URL" .
 agent:
   max_concurrent_agents: 4
   max_turns: 20
@@ -38,6 +40,7 @@ Issue context:
 Title: {{ .Issue.Title }}
 Status: {{ .Issue.State }}
 URL: {{ .Issue.URL }}
+Repository: {{ .Issue.RepositoryNameWithOwner }}
 
 Description:
 {{ .Issue.Description }}

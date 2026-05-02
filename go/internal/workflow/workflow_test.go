@@ -30,8 +30,9 @@ func TestParseConfigResolvesEnvAndDefaults(t *testing.T) {
 	root := filepath.Join("~", "symphony-test")
 	cfg, err := ParseConfig(map[string]any{
 		"tracker": map[string]any{
-			"owner":          "miyataka",
-			"project_number": 1,
+			"owner":                "miyataka",
+			"project_number":       1,
+			"allowed_repositories": []string{" Miyataka/API ", "miyataka/api", "miyataka/frontend"},
 		},
 		"workspace": map[string]any{
 			"root": root,
@@ -45,6 +46,11 @@ func TestParseConfigResolvesEnvAndDefaults(t *testing.T) {
 	}
 	if cfg.Tracker.StatusField != "Status" {
 		t.Fatalf("unexpected status field: %q", cfg.Tracker.StatusField)
+	}
+	if len(cfg.Tracker.AllowedRepositories) != 2 ||
+		cfg.Tracker.AllowedRepositories[0] != "miyataka/api" ||
+		cfg.Tracker.AllowedRepositories[1] != "miyataka/frontend" {
+		t.Fatalf("allowed repositories not normalized: %#v", cfg.Tracker.AllowedRepositories)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
