@@ -457,6 +457,25 @@ func workpadBody(issue tracker.Issue, status, workspacePath, note string) string
 	if workspacePath != "" {
 		lines = append(lines, "- Workspace: "+workspacePath)
 	}
+	if len(issue.PullRequests) > 0 {
+		lines = append(lines, "", "### Pull Requests", "")
+		for _, pr := range issue.PullRequests {
+			summary := fmt.Sprintf("- #%d %s", pr.Number, pr.State)
+			if pr.ReviewDecision != "" {
+				summary += " review=" + pr.ReviewDecision
+			}
+			if pr.StatusCheckRollupState != "" {
+				summary += " checks=" + pr.StatusCheckRollupState
+			}
+			if pr.UnresolvedThreadCount > 0 {
+				summary += fmt.Sprintf(" unresolved_threads=%d", pr.UnresolvedThreadCount)
+			}
+			if pr.URL != "" {
+				summary += " " + pr.URL
+			}
+			lines = append(lines, summary)
+		}
+	}
 	lines = append(lines,
 		"",
 		"### Notes",

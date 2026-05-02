@@ -307,6 +307,7 @@ func (c *Client) normalizeItem(item projectItem) (tracker.Issue, bool) {
 		RepositoryHTMLURL:       item.Content.Repository.HTMLURL,
 		Labels:                  labels,
 		BlockedBy:               nil,
+		PullRequests:            item.Content.PullRequests(),
 		CreatedAt:               createdAt,
 		UpdatedAt:               updatedAt,
 	}, true
@@ -590,6 +591,32 @@ type issueContent struct {
 			Login string `json:"login"`
 		} `json:"nodes"`
 	} `json:"assignees"`
+	ClosedByPullRequestsReferences struct {
+		Nodes []pullRequestContent `json:"nodes"`
+	} `json:"closedByPullRequestsReferences"`
+}
+
+type pullRequestContent struct {
+	ID                string `json:"id"`
+	Number            int    `json:"number"`
+	Title             string `json:"title"`
+	URL               string `json:"url"`
+	State             string `json:"state"`
+	IsDraft           bool   `json:"isDraft"`
+	ReviewDecision    string `json:"reviewDecision"`
+	MergeStateStatus  string `json:"mergeStateStatus"`
+	StatusCheckRollup *struct {
+		State string `json:"state"`
+	} `json:"statusCheckRollup"`
+	Comments struct {
+		TotalCount int `json:"totalCount"`
+	} `json:"comments"`
+	ReviewThreads struct {
+		Nodes []struct {
+			IsResolved bool `json:"isResolved"`
+		} `json:"nodes"`
+		TotalCount int `json:"totalCount"`
+	} `json:"reviewThreads"`
 }
 
 type issueDependency struct {
@@ -616,6 +643,37 @@ func (i issueContent) Identifier() string {
 		return i.ID
 	}
 	return i.Repository.NameWithOwner + "#" + strconv.Itoa(i.Number)
+}
+
+func (i issueContent) PullRequests() []tracker.PullRequest {
+	out := make([]tracker.PullRequest, 0, len(i.ClosedByPullRequestsReferences.Nodes))
+	for _, pr := range i.ClosedByPullRequestsReferences.Nodes {
+		unresolvedThreads := 0
+		for _, thread := range pr.ReviewThreads.Nodes {
+			if !thread.IsResolved {
+				unresolvedThreads++
+			}
+		}
+		checkState := ""
+		if pr.StatusCheckRollup != nil {
+			checkState = pr.StatusCheckRollup.State
+		}
+		out = append(out, tracker.PullRequest{
+			ID:                     pr.ID,
+			Number:                 pr.Number,
+			Title:                  pr.Title,
+			URL:                    pr.URL,
+			State:                  pr.State,
+			IsDraft:                pr.IsDraft,
+			ReviewDecision:         pr.ReviewDecision,
+			MergeStateStatus:       pr.MergeStateStatus,
+			StatusCheckRollupState: checkState,
+			CommentCount:           pr.Comments.TotalCount,
+			ReviewThreadCount:      pr.ReviewThreads.TotalCount,
+			UnresolvedThreadCount:  unresolvedThreads,
+		})
+	}
+	return out
 }
 
 func (i issueContent) BranchName() string {
@@ -732,6 +790,24 @@ content {
     repository { nameWithOwner sshUrl url }
     labels(first: 25) { nodes { name } }
     assignees(first: 25) { nodes { login } }
+    closedByPullRequestsReferences(first: 10) {
+      nodes {
+        id
+        number
+        title
+        url
+        state
+        isDraft
+        reviewDecision
+        mergeStateStatus
+        statusCheckRollup { state }
+        comments(first: 1) { totalCount }
+        reviewThreads(first: 100) {
+          totalCount
+          nodes { isResolved }
+        }
+      }
+    }
   }
 }
 fieldValues(first: 50) {
