@@ -1,10 +1,12 @@
 package orchestrator
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/miyataka/symphony/go/internal/tracker"
+	"github.com/miyataka/symphony/go/internal/workflow"
 )
 
 func TestRenderPrompt(t *testing.T) {
@@ -30,4 +32,94 @@ func TestSortIssues(t *testing.T) {
 	if issues[0].Identifier != "repo#1" || issues[1].Identifier != "repo#2" || issues[2].Identifier != "repo#3" {
 		t.Fatalf("unexpected order: %#v", issues)
 	}
+}
+
+func TestApplyReviewStatePolicyMovesHumanReviewToRework(t *testing.T) {
+	recorder := &recordingTracker{}
+	service := New(Options{
+		Config:  testConfig(),
+		Tracker: recorder,
+	})
+	handled := service.applyReviewStatePolicy(context.Background(), tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "Human Review",
+		PullRequests: []tracker.PullRequest{{
+			ReviewDecision: "CHANGES_REQUESTED",
+		}},
+	})
+	if !handled {
+		t.Fatal("expected policy to handle issue")
+	}
+	if recorder.updatedState != "Rework" {
+		t.Fatalf("unexpected updated state: %q", recorder.updatedState)
+	}
+	if recorder.workpad == "" {
+		t.Fatal("expected workpad update")
+	}
+}
+
+func TestApplyReviewStatePolicyMovesMergingToDoneWhenPRMerged(t *testing.T) {
+	recorder := &recordingTracker{}
+	service := New(Options{
+		Config:  testConfig(),
+		Tracker: recorder,
+	})
+	handled := service.applyReviewStatePolicy(context.Background(), tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "Merging",
+		PullRequests: []tracker.PullRequest{{
+			State: "MERGED",
+		}},
+	})
+	if !handled {
+		t.Fatal("expected policy to handle issue")
+	}
+	if recorder.updatedState != "Done" {
+		t.Fatalf("unexpected updated state: %q", recorder.updatedState)
+	}
+}
+
+func testConfig() workflow.Config {
+	cfg, err := workflow.ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"token":          "token",
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return cfg
+}
+
+type recordingTracker struct {
+	updatedState string
+	workpad      string
+}
+
+func (r *recordingTracker) FetchCandidateIssues(context.Context) ([]tracker.Issue, error) {
+	return nil, nil
+}
+
+func (r *recordingTracker) FetchIssuesByStates(context.Context, []string) ([]tracker.Issue, error) {
+	return nil, nil
+}
+
+func (r *recordingTracker) FetchIssueStatesByIDs(context.Context, []string) ([]tracker.Issue, error) {
+	return nil, nil
+}
+
+func (r *recordingTracker) UpdateIssueState(_ context.Context, _ tracker.Issue, state string) error {
+	r.updatedState = state
+	return nil
+}
+
+func (r *recordingTracker) UpsertWorkpad(_ context.Context, _ tracker.Issue, body string) error {
+	r.workpad = body
+	return nil
 }

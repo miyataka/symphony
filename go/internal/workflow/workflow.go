@@ -40,6 +40,9 @@ type TrackerConfig struct {
 	AllowedRepositories   []string `yaml:"allowed_repositories"`
 	StartState            string   `yaml:"start_state"`
 	HandoffState          string   `yaml:"handoff_state"`
+	ReworkState           string   `yaml:"rework_state"`
+	MergingState          string   `yaml:"merging_state"`
+	DoneState             string   `yaml:"done_state"`
 	WorkpadMarker         string   `yaml:"workpad_marker"`
 	ReadIssueDependencies bool     `yaml:"read_issue_dependencies"`
 	ActiveStates          []string `yaml:"active_states"`
@@ -141,6 +144,9 @@ func defaultConfig() Config {
 			PriorityField:         "Priority",
 			StartState:            "In Progress",
 			HandoffState:          "Human Review",
+			ReworkState:           "Rework",
+			MergingState:          "Merging",
+			DoneState:             "Done",
 			WorkpadMarker:         "## Codex Workpad",
 			ReadIssueDependencies: true,
 			ActiveStates:          []string{"Todo", "In Progress", "Rework", "Merging"},
@@ -184,6 +190,15 @@ func (c *Config) Resolve() error {
 	}
 	if c.Tracker.HandoffState == "" {
 		c.Tracker.HandoffState = "Human Review"
+	}
+	if c.Tracker.ReworkState == "" {
+		c.Tracker.ReworkState = "Rework"
+	}
+	if c.Tracker.MergingState == "" {
+		c.Tracker.MergingState = "Merging"
+	}
+	if c.Tracker.DoneState == "" {
+		c.Tracker.DoneState = "Done"
 	}
 	if c.Tracker.WorkpadMarker == "" {
 		c.Tracker.WorkpadMarker = "## Codex Workpad"
