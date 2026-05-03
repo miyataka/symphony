@@ -61,6 +61,9 @@ func TestParseConfigResolvesEnvAndDefaults(t *testing.T) {
 		cfg.Tracker.MonitorStates[1] != "Merging" {
 		t.Fatalf("unexpected monitor states: %#v", cfg.Tracker.MonitorStates)
 	}
+	if cfg.PullRequest.MergeMethod != "SQUASH" || !cfg.PullRequest.RequireApproval || !cfg.PullRequest.RequirePassingChecks {
+		t.Fatalf("unexpected pull request defaults: %#v", cfg.PullRequest)
+	}
 	if len(cfg.Tracker.AllowedRepositories) != 2 ||
 		cfg.Tracker.AllowedRepositories[0] != "miyataka/api" ||
 		cfg.Tracker.AllowedRepositories[1] != "miyataka/frontend" {
@@ -72,6 +75,39 @@ func TestParseConfigResolvesEnvAndDefaults(t *testing.T) {
 	}
 	if cfg.Workspace.Root != filepath.Join(home, "symphony-test") {
 		t.Fatalf("workspace root not expanded: %q", cfg.Workspace.Root)
+	}
+}
+
+func TestParseConfigResolvesPullRequestAndWorkspaceOptions(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"pull_request": map[string]any{
+			"auto_merge":           true,
+			"merge_method":         "rebase",
+			"required_check_names": []string{" go ", "go", "make-all"},
+		},
+		"workspace": map[string]any{
+			"cleanup_orphans":          true,
+			"cleanup_stale_after_days": 14,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.PullRequest.AutoMerge || cfg.PullRequest.MergeMethod != "REBASE" {
+		t.Fatalf("unexpected pull request config: %#v", cfg.PullRequest)
+	}
+	if len(cfg.PullRequest.RequiredCheckNames) != 2 ||
+		cfg.PullRequest.RequiredCheckNames[0] != "go" ||
+		cfg.PullRequest.RequiredCheckNames[1] != "make-all" {
+		t.Fatalf("unexpected required checks: %#v", cfg.PullRequest.RequiredCheckNames)
+	}
+	if !cfg.Workspace.CleanupOrphans || cfg.Workspace.CleanupStaleAfterDays != 14 {
+		t.Fatalf("unexpected workspace config: %#v", cfg.Workspace)
 	}
 }
 

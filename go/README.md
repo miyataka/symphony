@@ -34,6 +34,12 @@ export GITHUB_TOKEN=...
 go run ./cmd/symphony --workflow ./WORKFLOW.github.md
 ```
 
+To print setup commands for a GitHub Project:
+
+```bash
+go run ./cmd/symphony setup-github-project --workflow ./WORKFLOW.github.md
+```
+
 ## Configuration
 
 Use YAML front matter plus a Go `text/template` prompt body. The prompt receives:
@@ -66,11 +72,34 @@ tracker:
   active_states: [Todo, In Progress, Rework]
   monitor_states: [Human Review, Merging]
   terminal_states: [Done, Closed, Cancelled, Canceled, Duplicate]
+pull_request:
+  auto_merge: false
+  merge_method: SQUASH
+  require_approval: true
+  require_passing_checks: true
+  required_check_names: []
 workspace:
   root: ~/code/symphony-workspaces
+  cleanup_orphans: false
+  cleanup_stale_after_days: 0
 hooks:
   after_create: |
-    git clone --depth 1 "$SYMPHONY_REPOSITORY_SSH_URL" .
+    git clone "$SYMPHONY_REPOSITORY_SSH_URL" .
+    git fetch origin --prune
+    base_branch="$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||')"
+    git checkout -B "$SYMPHONY_BRANCH" "origin/$base_branch"
+  before_run: |
+    git fetch origin --prune
+  after_run: |
+    if [ -z "$(git status --porcelain)" ]; then
+      exit 0
+    fi
+    git add -A
+    git commit -m "$SYMPHONY_ISSUE_IDENTIFIER: agent update"
+    git push -u origin "$SYMPHONY_BRANCH"
+    gh pr view "$SYMPHONY_BRANCH" --repo "$SYMPHONY_REPOSITORY" >/dev/null 2>&1 || \
+      gh pr create --repo "$SYMPHONY_REPOSITORY" --head "$SYMPHONY_BRANCH" \
+        --title "$SYMPHONY_ISSUE_TITLE" --body "Automated work for $SYMPHONY_ISSUE_URL"
 agent:
   max_concurrent_agents: 4
   max_turns: 20
@@ -94,6 +123,7 @@ Repository: {{ .Issue.RepositoryNameWithOwner }}
 - `SYMPHONY_ISSUE_TITLE`
 - `SYMPHONY_ISSUE_URL`
 - `SYMPHONY_ISSUE_STATE`
+- `SYMPHONY_BRANCH`
 - `SYMPHONY_REPOSITORY`
 - `SYMPHONY_REPOSITORY_SSH_URL`
 - `SYMPHONY_REPOSITORY_HTML_URL`
@@ -139,6 +169,24 @@ When linked PR data is present, Symphony applies two conservative state transiti
 - `tracker.merging_state` moves to `tracker.done_state` if any linked PR is merged.
 - `tracker.merging_state` moves back to `tracker.rework_state` if a linked PR gets requested
   changes, unresolved review threads, or failing checks before merge.
+
+When `pull_request.auto_merge` is true, a ready PR in `tracker.merging_state` is merged with
+`pull_request.merge_method`. `required_check_names` can restrict readiness to specific check names;
+when it is empty, the GitHub check rollup state is used.
+
+## Workspace cleanup
+
+Terminal issues remove their workspaces on startup. `workspace.cleanup_orphans` also removes
+workspace directories that no longer match visible Project items, and
+`workspace.cleanup_stale_after_days` removes old workspace directories by modification time.
+
+## Hook examples
+
+Reusable shell snippets live in `go/examples/`:
+
+- `github-after-create.sh` clones the issue repository and checks out the Symphony branch.
+- `github-before-run.sh` refreshes refs before each agent turn.
+- `github-after-run-pr.sh` commits changes, pushes the branch, and creates a PR if needed.
 
 ## Testing
 

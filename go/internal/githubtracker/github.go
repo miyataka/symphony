@@ -398,6 +398,34 @@ func (c *Client) UpsertWorkpad(ctx context.Context, issue tracker.Issue, body st
 	return response.err()
 }
 
+func (c *Client) MergePullRequest(ctx context.Context, issue tracker.Issue, pr tracker.PullRequest, opts tracker.MergeOptions) error {
+	if pr.ID == "" {
+		return errors.New("pull request id is required")
+	}
+	method := strings.ToUpper(strings.TrimSpace(opts.Method))
+	if method == "" {
+		method = "SQUASH"
+	}
+	switch method {
+	case "MERGE", "SQUASH", "REBASE":
+	default:
+		return fmt.Errorf("unsupported pull request merge method %q", method)
+	}
+	headline := strings.TrimSpace(opts.CommitHeadline)
+	if headline == "" {
+		headline = fmt.Sprintf("%s: %s", issue.Identifier, issue.Title)
+	}
+	var response graphQLMutationResponse
+	if err := c.graphql(ctx, mergePullRequestMutation, map[string]any{
+		"pullRequestId": pr.ID,
+		"mergeMethod":   method,
+		"headline":      headline,
+	}, &response); err != nil {
+		return err
+	}
+	return response.err()
+}
+
 func (c *Client) findWorkpadCommentID(ctx context.Context, issueID, marker string) (string, error) {
 	var response issueCommentsResponse
 	if err := c.graphql(ctx, issueCommentsQuery, map[string]any{"id": issueID}, &response); err != nil {
@@ -629,7 +657,10 @@ type pullRequestContent struct {
 	ReviewDecision    string `json:"reviewDecision"`
 	MergeStateStatus  string `json:"mergeStateStatus"`
 	StatusCheckRollup *struct {
-		State string `json:"state"`
+		State    string `json:"state"`
+		Contexts struct {
+			Nodes []statusCheckContent `json:"nodes"`
+		} `json:"contexts"`
 	} `json:"statusCheckRollup"`
 	Comments struct {
 		TotalCount int `json:"totalCount"`
@@ -640,6 +671,30 @@ type pullRequestContent struct {
 		} `json:"nodes"`
 		TotalCount int `json:"totalCount"`
 	} `json:"reviewThreads"`
+}
+
+type statusCheckContent struct {
+	Typename   string `json:"__typename"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	Context    string `json:"context"`
+	State      string `json:"state"`
+}
+
+func (c statusCheckContent) Check() tracker.StatusCheck {
+	name := c.Name
+	if name == "" {
+		name = c.Context
+	}
+	state := c.Conclusion
+	if state == "" {
+		state = c.State
+	}
+	if state == "" {
+		state = c.Status
+	}
+	return tracker.StatusCheck{Name: name, State: state}
 }
 
 type issueDependency struct {
@@ -678,8 +733,15 @@ func (i issueContent) PullRequests() []tracker.PullRequest {
 			}
 		}
 		checkState := ""
+		var checks []tracker.StatusCheck
 		if pr.StatusCheckRollup != nil {
 			checkState = pr.StatusCheckRollup.State
+			for _, context := range pr.StatusCheckRollup.Contexts.Nodes {
+				check := context.Check()
+				if check.Name != "" {
+					checks = append(checks, check)
+				}
+			}
 		}
 		out = append(out, tracker.PullRequest{
 			ID:                     pr.ID,
@@ -691,6 +753,7 @@ func (i issueContent) PullRequests() []tracker.PullRequest {
 			ReviewDecision:         pr.ReviewDecision,
 			MergeStateStatus:       pr.MergeStateStatus,
 			StatusCheckRollupState: checkState,
+			Checks:                 checks,
 			CommentCount:           pr.Comments.TotalCount,
 			ReviewThreadCount:      pr.ReviewThreads.TotalCount,
 			UnresolvedThreadCount:  unresolvedThreads,
@@ -823,7 +886,16 @@ content {
         isDraft
         reviewDecision
         mergeStateStatus
-        statusCheckRollup { state }
+        statusCheckRollup {
+          state
+          contexts(first: 50) {
+            nodes {
+              __typename
+              ... on CheckRun { name status conclusion }
+              ... on StatusContext { context state }
+            }
+          }
+        }
         comments(first: 1) { totalCount }
         reviewThreads(first: 100) {
           totalCount
@@ -928,6 +1000,17 @@ const updateIssueCommentMutation = `
 mutation SymphonyUpdateWorkpad($id: ID!, $body: String!) {
   updateIssueComment(input: { id: $id, body: $body }) {
     issueComment { id }
+  }
+}`
+
+const mergePullRequestMutation = `
+mutation SymphonyMergePullRequest($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!, $headline: String!) {
+  mergePullRequest(input: {
+    pullRequestId: $pullRequestId,
+    mergeMethod: $mergeMethod,
+    commitHeadline: $headline
+  }) {
+    pullRequest { id merged }
   }
 }`
 

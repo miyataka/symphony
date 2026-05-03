@@ -190,6 +190,69 @@ func TestApplyReviewStatePolicyKeepsMergingWhenPRChecksPending(t *testing.T) {
 	}
 }
 
+func TestApplyReviewStatePolicyAutoMergesReadyPR(t *testing.T) {
+	recorder := &recordingTracker{}
+	cfg := testConfig()
+	cfg.PullRequest.AutoMerge = true
+	service := New(Options{
+		Config:  cfg,
+		Tracker: recorder,
+	})
+	handled := service.applyReviewStatePolicy(context.Background(), tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "Merging",
+		PullRequests: []tracker.PullRequest{{
+			ID:                     "PR_1",
+			Number:                 10,
+			State:                  "OPEN",
+			ReviewDecision:         "APPROVED",
+			StatusCheckRollupState: "SUCCESS",
+		}},
+	})
+	if !handled {
+		t.Fatal("expected policy to handle issue")
+	}
+	if recorder.mergedPRID != "PR_1" {
+		t.Fatalf("unexpected merged pr id: %q", recorder.mergedPRID)
+	}
+	if recorder.mergeMethod != "SQUASH" {
+		t.Fatalf("unexpected merge method: %q", recorder.mergeMethod)
+	}
+	if recorder.workpad == "" {
+		t.Fatal("expected workpad update")
+	}
+}
+
+func TestApplyReviewStatePolicyRequiresNamedChecks(t *testing.T) {
+	recorder := &recordingTracker{}
+	cfg := testConfig()
+	cfg.PullRequest.RequiredCheckNames = []string{"go", "make-all"}
+	service := New(Options{
+		Config:  cfg,
+		Tracker: recorder,
+	})
+	handled := service.applyReviewStatePolicy(context.Background(), tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "Human Review",
+		PullRequests: []tracker.PullRequest{{
+			State:                  "OPEN",
+			ReviewDecision:         "APPROVED",
+			StatusCheckRollupState: "SUCCESS",
+			Checks: []tracker.StatusCheck{
+				{Name: "go", State: "SUCCESS"},
+				{Name: "make-all", State: "PENDING"},
+			},
+		}},
+	})
+	if handled {
+		t.Fatal("expected policy not to handle until required checks pass")
+	}
+}
+
 func TestCanDispatchRequiresActiveState(t *testing.T) {
 	service := New(Options{
 		Config:  testConfig(),
@@ -256,6 +319,8 @@ func testConfig() workflow.Config {
 type recordingTracker struct {
 	updatedState string
 	workpad      string
+	mergedPRID   string
+	mergeMethod  string
 }
 
 func (r *recordingTracker) FetchCandidateIssues(context.Context) ([]tracker.Issue, error) {
@@ -277,5 +342,11 @@ func (r *recordingTracker) UpdateIssueState(_ context.Context, _ tracker.Issue, 
 
 func (r *recordingTracker) UpsertWorkpad(_ context.Context, _ tracker.Issue, body string) error {
 	r.workpad = body
+	return nil
+}
+
+func (r *recordingTracker) MergePullRequest(_ context.Context, _ tracker.Issue, pr tracker.PullRequest, opts tracker.MergeOptions) error {
+	r.mergedPRID = pr.ID
+	r.mergeMethod = opts.Method
 	return nil
 }

@@ -150,7 +150,15 @@ func TestFetchIssuesByStatesNormalizesLinkedPullRequests(t *testing.T) {
 											"isDraft": false,
 											"reviewDecision": "CHANGES_REQUESTED",
 											"mergeStateStatus": "UNSTABLE",
-											"statusCheckRollup": {"state": "FAILURE"},
+											"statusCheckRollup": {
+												"state": "FAILURE",
+												"contexts": {
+													"nodes": [
+														{"__typename": "CheckRun", "name": "go", "status": "COMPLETED", "conclusion": "FAILURE"},
+														{"__typename": "StatusContext", "context": "lint", "state": "SUCCESS"}
+													]
+												}
+											},
 											"comments": {"totalCount": 3},
 											"reviewThreads": {
 												"totalCount": 2,
@@ -207,6 +215,60 @@ func TestFetchIssuesByStatesNormalizesLinkedPullRequests(t *testing.T) {
 	}
 	if pr.UnresolvedThreadCount != 1 || pr.ReviewThreadCount != 2 || pr.CommentCount != 3 {
 		t.Fatalf("unexpected review/comment counts: %#v", pr)
+	}
+	if len(pr.Checks) != 2 || pr.Checks[0].Name != "go" || pr.Checks[0].State != "FAILURE" || pr.Checks[1].Name != "lint" {
+		t.Fatalf("unexpected checks: %#v", pr.Checks)
+	}
+}
+
+func TestMergePullRequest(t *testing.T) {
+	var sawMutation bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if !strings.Contains(payload.Query, "SymphonyMergePullRequest") {
+			t.Fatalf("unexpected query: %s", payload.Query)
+		}
+		sawMutation = true
+		if payload.Variables["pullRequestId"] != "PR_1" {
+			t.Fatalf("unexpected pull request id: %#v", payload.Variables)
+		}
+		if payload.Variables["mergeMethod"] != "SQUASH" {
+			t.Fatalf("unexpected merge method: %#v", payload.Variables)
+		}
+		if !strings.Contains(payload.Variables["headline"].(string), "miyataka/symphony#1") {
+			t.Fatalf("unexpected headline: %#v", payload.Variables)
+		}
+		_, _ = w.Write([]byte(`{"data":{"mergePullRequest":{"pullRequest":{"id":"PR_1","merged":true}}}}`))
+	}))
+	defer server.Close()
+
+	client, err := New(workflow.TrackerConfig{
+		Token:         "token",
+		Endpoint:      server.URL,
+		Owner:         "miyataka",
+		OwnerType:     "user",
+		ProjectNumber: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.MergePullRequest(context.Background(), tracker.Issue{
+		ID:         "I_1",
+		Identifier: "miyataka/symphony#1",
+		Title:      "Issue title",
+	}, tracker.PullRequest{ID: "PR_1"}, tracker.MergeOptions{Method: "SQUASH"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sawMutation {
+		t.Fatal("expected merge mutation")
 	}
 }
 

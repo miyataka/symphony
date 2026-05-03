@@ -67,8 +67,8 @@ func (s *Service) Run(ctx context.Context) error {
 	if s.tracker == nil {
 		return errors.New("tracker is required")
 	}
-	if err := s.cleanupTerminalWorkspaces(ctx); err != nil {
-		s.logger.Warn("startup terminal workspace cleanup failed", "error", err)
+	if err := s.cleanupWorkspaces(ctx); err != nil {
+		s.logger.Warn("startup workspace cleanup failed", "error", err)
 	}
 
 	if err := s.poll(ctx); err != nil {
@@ -111,6 +111,7 @@ func (s *Service) poll(ctx context.Context) error {
 				s.logger.Warn("failed to move issue to start state", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "state", s.cfg.Tracker.StartState, "error", err)
 				continue
 			}
+			s.logStateTransition(issue, issue.State, s.cfg.Tracker.StartState, "dispatch_start")
 			issue.State = s.cfg.Tracker.StartState
 		}
 		s.dispatch(ctx, issue, 0)
@@ -128,7 +129,7 @@ func (s *Service) applyReviewStatePolicy(ctx context.Context, issue tracker.Issu
 			s.moveIssueWithWorkpad(ctx, issue, s.cfg.Tracker.ReworkState, "Linked PR has actionable review feedback.")
 			return true
 		}
-		if issueHasReadyPR(issue) {
+		if s.issueHasReadyPR(issue) {
 			s.moveIssueWithWorkpad(ctx, issue, s.cfg.Tracker.MergingState, "Linked PR is approved and checks are passing.")
 			return true
 		}
@@ -137,9 +138,15 @@ func (s *Service) applyReviewStatePolicy(ctx context.Context, issue tracker.Issu
 			s.moveIssueWithWorkpad(ctx, issue, s.cfg.Tracker.DoneState, "Linked PR is merged.")
 			return true
 		}
-		if issueNeedsPRRework(issue) {
+		if s.issueNeedsPRRework(issue) {
 			s.moveIssueWithWorkpad(ctx, issue, s.cfg.Tracker.ReworkState, "Linked PR needs rework before merge.")
 			return true
+		}
+		if s.cfg.PullRequest.AutoMerge {
+			if pr, ok := s.readyPullRequest(issue); ok {
+				s.mergePullRequest(ctx, issue, pr)
+				return true
+			}
 		}
 	}
 	return false
@@ -153,6 +160,7 @@ func (s *Service) moveIssueWithWorkpad(ctx context.Context, issue tracker.Issue,
 		s.logger.Warn("failed to apply review state policy", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "state", state, "error", err)
 		return
 	}
+	s.logStateTransition(issue, issue.State, state, note)
 	issue.State = state
 	s.upsertWorkpad(ctx, issue, workpadBody(issue, state, "", note))
 }
@@ -270,6 +278,7 @@ func (s *Service) handleSuccessfulRun(ctx context.Context, issue tracker.Issue) 
 			s.logger.Warn("failed to move issue to handoff state", "issue_id", refreshed.ID, "issue_identifier", refreshed.Identifier, "state", s.cfg.Tracker.HandoffState, "error", err)
 			return
 		}
+		s.logStateTransition(refreshed, refreshed.State, s.cfg.Tracker.HandoffState, "agent_run_completed")
 		refreshed.State = s.cfg.Tracker.HandoffState
 	}
 	s.upsertWorkpad(ctx, refreshed, workpadBody(refreshed, "Human Review", "", "Agent run completed and issue is ready for review."))
@@ -357,17 +366,52 @@ func (s *Service) reconcileRunning(ctx context.Context) {
 	}
 }
 
-func (s *Service) cleanupTerminalWorkspaces(ctx context.Context) error {
+func (s *Service) cleanupWorkspaces(ctx context.Context) error {
 	issues, err := s.tracker.FetchIssuesByStates(ctx, s.cfg.Tracker.TerminalStates)
 	if err != nil {
 		return err
 	}
+	known := map[string]struct{}{}
 	for _, issue := range issues {
+		known[workspace.NameForIssue(issue.Identifier)] = struct{}{}
 		if issue.Identifier != "" {
 			if err := s.workspaces.Remove(ctx, issue.Identifier, s.cfg.HookTimeout()); err != nil {
 				s.logger.Warn("workspace cleanup failed", "issue_identifier", issue.Identifier, "error", err)
+			} else {
+				s.logger.Info("workspace removed for terminal issue", "issue_identifier", issue.Identifier)
 			}
 		}
+	}
+	if !s.cfg.Workspace.CleanupOrphans && s.cfg.Workspace.CleanupStaleAfterDays == 0 {
+		return nil
+	}
+	activeIssues, err := s.tracker.FetchCandidateIssues(ctx)
+	if err != nil {
+		return err
+	}
+	for _, issue := range activeIssues {
+		known[workspace.NameForIssue(issue.Identifier)] = struct{}{}
+	}
+	entries, err := s.workspaces.List()
+	if err != nil {
+		return err
+	}
+	staleCutoff := time.Time{}
+	if s.cfg.Workspace.CleanupStaleAfterDays > 0 {
+		staleCutoff = time.Now().AddDate(0, 0, -s.cfg.Workspace.CleanupStaleAfterDays)
+	}
+	for _, entry := range entries {
+		_, knownWorkspace := known[entry.Name]
+		stale := !staleCutoff.IsZero() && entry.ModTime.Before(staleCutoff)
+		orphan := s.cfg.Workspace.CleanupOrphans && !knownWorkspace
+		if !orphan && !stale {
+			continue
+		}
+		if err := s.workspaces.RemoveEntry(ctx, entry, s.cfg.HookTimeout()); err != nil {
+			s.logger.Warn("workspace cleanup failed", "workspace", entry.Path, "orphan", orphan, "stale", stale, "error", err)
+			continue
+		}
+		s.logger.Info("workspace removed", "workspace", entry.Path, "orphan", orphan, "stale", stale)
 	}
 	return nil
 }
@@ -415,6 +459,13 @@ func (s *Service) writeback() tracker.Writeback {
 	return nil
 }
 
+func (s *Service) pullRequestMerger() tracker.PullRequestMerger {
+	if merger, ok := s.tracker.(tracker.PullRequestMerger); ok {
+		return merger
+	}
+	return nil
+}
+
 func (s *Service) updateIssueState(ctx context.Context, issue tracker.Issue, state string) error {
 	writeback := s.writeback()
 	if writeback == nil {
@@ -431,6 +482,36 @@ func (s *Service) upsertWorkpad(ctx context.Context, issue tracker.Issue, body s
 	if err := writeback.UpsertWorkpad(ctx, issue, body); err != nil {
 		s.logger.Warn("failed to upsert workpad", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
 	}
+}
+
+func (s *Service) mergePullRequest(ctx context.Context, issue tracker.Issue, pr tracker.PullRequest) {
+	merger := s.pullRequestMerger()
+	if merger == nil {
+		s.logger.Warn("pull request merge requested but tracker does not support it", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "pr_number", pr.Number)
+		return
+	}
+	opts := tracker.MergeOptions{
+		Method:         s.cfg.PullRequest.MergeMethod,
+		CommitHeadline: fmt.Sprintf("%s: %s", issue.Identifier, issue.Title),
+	}
+	if err := merger.MergePullRequest(ctx, issue, pr, opts); err != nil {
+		s.logger.Warn("failed to merge pull request", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "pr_number", pr.Number, "error", err)
+		s.upsertWorkpad(ctx, issue, workpadBody(issue, issue.State, "", "Linked PR is ready, but automatic merge failed: "+err.Error()))
+		return
+	}
+	s.logger.Info("pull request merge submitted", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "pr_number", pr.Number, "method", opts.Method)
+	s.upsertWorkpad(ctx, issue, workpadBody(issue, issue.State, "", "Linked PR is ready and automatic merge was submitted."))
+}
+
+func (s *Service) logStateTransition(issue tracker.Issue, from, to, reason string) {
+	s.logger.Info(
+		"issue state transition",
+		"issue_id", issue.ID,
+		"issue_identifier", issue.Identifier,
+		"from", from,
+		"to", to,
+		"reason", reason,
+	)
 }
 
 func (s *Service) limitForState(state string) int {
@@ -512,9 +593,9 @@ func issueHasActionablePRFeedback(issue tracker.Issue) bool {
 	return false
 }
 
-func issueNeedsPRRework(issue tracker.Issue) bool {
+func (s *Service) issueNeedsPRRework(issue tracker.Issue) bool {
 	for _, pr := range issue.PullRequests {
-		if pr.HasActionableFeedback() || pr.ChecksFailing() {
+		if pr.HasActionableFeedback() || pr.RequiredChecksFailing(s.cfg.PullRequest.RequiredCheckNames) {
 			return true
 		}
 	}
@@ -530,13 +611,37 @@ func issueHasMergedPR(issue tracker.Issue) bool {
 	return false
 }
 
-func issueHasReadyPR(issue tracker.Issue) bool {
+func (s *Service) issueHasReadyPR(issue tracker.Issue) bool {
+	_, ok := s.readyPullRequest(issue)
+	return ok
+}
+
+func (s *Service) readyPullRequest(issue tracker.Issue) (tracker.PullRequest, bool) {
 	for _, pr := range issue.PullRequests {
-		if pr.ReadyForMerge() {
-			return true
+		if s.pullRequestReadyForMerge(pr) {
+			return pr, true
 		}
 	}
-	return false
+	return tracker.PullRequest{}, false
+}
+
+func (s *Service) pullRequestReadyForMerge(pr tracker.PullRequest) bool {
+	if pr.State != "OPEN" {
+		return false
+	}
+	if pr.IsDraft && !s.cfg.PullRequest.AllowDraft {
+		return false
+	}
+	if s.cfg.PullRequest.RequireApproval && pr.ReviewDecision != "APPROVED" {
+		return false
+	}
+	if pr.HasActionableFeedback() {
+		return false
+	}
+	if s.cfg.PullRequest.RequirePassingChecks && !pr.RequiredChecksPassing(s.cfg.PullRequest.RequiredCheckNames) {
+		return false
+	}
+	return true
 }
 
 func workpadBody(issue tracker.Issue, status, workspacePath, note string) string {
