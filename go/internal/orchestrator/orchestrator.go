@@ -137,6 +137,10 @@ func (s *Service) applyReviewStatePolicy(ctx context.Context, issue tracker.Issu
 			s.moveIssueWithWorkpad(ctx, issue, s.cfg.Tracker.DoneState, "Linked PR is merged.")
 			return true
 		}
+		if issueNeedsPRRework(issue) {
+			s.moveIssueWithWorkpad(ctx, issue, s.cfg.Tracker.ReworkState, "Linked PR needs rework before merge.")
+			return true
+		}
 	}
 	return false
 }
@@ -502,6 +506,15 @@ func sameState(left, right string) bool {
 func issueHasActionablePRFeedback(issue tracker.Issue) bool {
 	for _, pr := range issue.PullRequests {
 		if pr.HasActionableFeedback() {
+			return true
+		}
+	}
+	return false
+}
+
+func issueNeedsPRRework(issue tracker.Issue) bool {
+	for _, pr := range issue.PullRequests {
+		if pr.HasActionableFeedback() || pr.ChecksFailing() {
 			return true
 		}
 	}

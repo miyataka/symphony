@@ -137,6 +137,59 @@ func TestApplyReviewStatePolicyMovesMergingToDoneWhenPRMerged(t *testing.T) {
 	}
 }
 
+func TestApplyReviewStatePolicyMovesMergingToReworkWhenPRNeedsRework(t *testing.T) {
+	recorder := &recordingTracker{}
+	service := New(Options{
+		Config:  testConfig(),
+		Tracker: recorder,
+	})
+	handled := service.applyReviewStatePolicy(context.Background(), tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "Merging",
+		PullRequests: []tracker.PullRequest{{
+			State:                  "OPEN",
+			ReviewDecision:         "APPROVED",
+			StatusCheckRollupState: "FAILURE",
+		}},
+	})
+	if !handled {
+		t.Fatal("expected policy to handle issue")
+	}
+	if recorder.updatedState != "Rework" {
+		t.Fatalf("unexpected updated state: %q", recorder.updatedState)
+	}
+	if recorder.workpad == "" {
+		t.Fatal("expected workpad update")
+	}
+}
+
+func TestApplyReviewStatePolicyKeepsMergingWhenPRChecksPending(t *testing.T) {
+	recorder := &recordingTracker{}
+	service := New(Options{
+		Config:  testConfig(),
+		Tracker: recorder,
+	})
+	handled := service.applyReviewStatePolicy(context.Background(), tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "Merging",
+		PullRequests: []tracker.PullRequest{{
+			State:                  "OPEN",
+			ReviewDecision:         "APPROVED",
+			StatusCheckRollupState: "PENDING",
+		}},
+	})
+	if handled {
+		t.Fatal("expected policy not to handle pending checks")
+	}
+	if recorder.updatedState != "" {
+		t.Fatalf("unexpected updated state: %q", recorder.updatedState)
+	}
+}
+
 func TestCanDispatchRequiresActiveState(t *testing.T) {
 	service := New(Options{
 		Config:  testConfig(),
