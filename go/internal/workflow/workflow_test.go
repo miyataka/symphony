@@ -53,6 +53,9 @@ func TestParseConfigResolvesEnvAndDefaults(t *testing.T) {
 	if !cfg.Tracker.ReadIssueDependencies {
 		t.Fatal("expected issue dependency reads to default on")
 	}
+	if len(cfg.Tracker.MonitorStates) != 1 || cfg.Tracker.MonitorStates[0] != "Human Review" {
+		t.Fatalf("unexpected monitor states: %#v", cfg.Tracker.MonitorStates)
+	}
 	if len(cfg.Tracker.AllowedRepositories) != 2 ||
 		cfg.Tracker.AllowedRepositories[0] != "miyataka/api" ||
 		cfg.Tracker.AllowedRepositories[1] != "miyataka/frontend" {

@@ -78,14 +78,14 @@ func normalizeRepositoryList(values []string) []string {
 }
 
 func (c *Client) FetchCandidateIssues(ctx context.Context) ([]tracker.Issue, error) {
-	return c.FetchIssuesByStates(ctx, c.cfg.ActiveStates)
+	return c.FetchIssuesByStates(ctx, issueFetchStates(c.cfg))
 }
 
 func (c *Client) FetchIssueStatesByIDs(ctx context.Context, ids []string) ([]tracker.Issue, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	allStates := append([]string{}, c.cfg.ActiveStates...)
+	allStates := issueFetchStates(c.cfg)
 	allStates = append(allStates, c.cfg.TerminalStates...)
 	issues, err := c.FetchIssuesByStates(ctx, allStates)
 	if err != nil {
@@ -102,6 +102,29 @@ func (c *Client) FetchIssueStatesByIDs(ctx context.Context, ids []string) ([]tra
 		}
 	}
 	return filtered, nil
+}
+
+func issueFetchStates(cfg workflow.TrackerConfig) []string {
+	states := append([]string{}, cfg.ActiveStates...)
+	states = append(states, cfg.MonitorStates...)
+	return uniqueStates(states)
+}
+
+func uniqueStates(states []string) []string {
+	out := make([]string, 0, len(states))
+	seen := map[string]struct{}{}
+	for _, state := range states {
+		normalized := normalize(state)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, state)
+	}
+	return out
 }
 
 func (c *Client) FetchIssuesByStates(ctx context.Context, states []string) ([]tracker.Issue, error) {

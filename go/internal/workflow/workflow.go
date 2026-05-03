@@ -46,6 +46,7 @@ type TrackerConfig struct {
 	WorkpadMarker         string   `yaml:"workpad_marker"`
 	ReadIssueDependencies bool     `yaml:"read_issue_dependencies"`
 	ActiveStates          []string `yaml:"active_states"`
+	MonitorStates         []string `yaml:"monitor_states"`
 	TerminalStates        []string `yaml:"terminal_states"`
 }
 
@@ -150,6 +151,7 @@ func defaultConfig() Config {
 			WorkpadMarker:         "## Codex Workpad",
 			ReadIssueDependencies: true,
 			ActiveStates:          []string{"Todo", "In Progress", "Rework", "Merging"},
+			MonitorStates:         []string{"Human Review"},
 			TerminalStates:        []string{"Done", "Closed", "Cancelled", "Canceled", "Duplicate"},
 		},
 		Polling: PollingConfig{IntervalMS: int((30 * time.Second) / time.Millisecond)},
@@ -202,6 +204,9 @@ func (c *Config) Resolve() error {
 	}
 	if c.Tracker.WorkpadMarker == "" {
 		c.Tracker.WorkpadMarker = "## Codex Workpad"
+	}
+	if len(c.Tracker.MonitorStates) == 0 && c.Tracker.HandoffState != "" {
+		c.Tracker.MonitorStates = []string{c.Tracker.HandoffState}
 	}
 	if c.Polling.IntervalMS <= 0 {
 		c.Polling.IntervalMS = int((30 * time.Second) / time.Millisecond)
