@@ -150,8 +150,8 @@ func defaultConfig() Config {
 			DoneState:             "Done",
 			WorkpadMarker:         "## Codex Workpad",
 			ReadIssueDependencies: true,
-			ActiveStates:          []string{"Todo", "In Progress", "Rework", "Merging"},
-			MonitorStates:         []string{"Human Review"},
+			ActiveStates:          []string{"Todo", "In Progress", "Rework"},
+			MonitorStates:         []string{"Human Review", "Merging"},
 			TerminalStates:        []string{"Done", "Closed", "Cancelled", "Canceled", "Duplicate"},
 		},
 		Polling: PollingConfig{IntervalMS: int((30 * time.Second) / time.Millisecond)},
@@ -206,7 +206,7 @@ func (c *Config) Resolve() error {
 		c.Tracker.WorkpadMarker = "## Codex Workpad"
 	}
 	if len(c.Tracker.MonitorStates) == 0 && c.Tracker.HandoffState != "" {
-		c.Tracker.MonitorStates = []string{c.Tracker.HandoffState}
+		c.Tracker.MonitorStates = []string{c.Tracker.HandoffState, c.Tracker.MergingState}
 	}
 	if c.Polling.IntervalMS <= 0 {
 		c.Polling.IntervalMS = int((30 * time.Second) / time.Millisecond)

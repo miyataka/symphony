@@ -20,9 +20,9 @@ tracker:
     - Todo
     - In Progress
     - Rework
-    - Merging
   monitor_states:
     - Human Review
+    - Merging
   terminal_states:
     - Done
     - Closed
