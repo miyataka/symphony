@@ -31,11 +31,37 @@ tracker:
     - Duplicate
 polling:
   interval_ms: 30000
+pull_request:
+  auto_merge: false
+  merge_method: SQUASH
+  require_approval: true
+  require_passing_checks: true
+  required_check_names: []
 workspace:
   root: ~/code/symphony-workspaces
+  cleanup_orphans: false
+  cleanup_stale_after_days: 0
 hooks:
   after_create: |
-    git clone --depth 1 "$SYMPHONY_REPOSITORY_SSH_URL" .
+    set -eu
+    git clone "$SYMPHONY_REPOSITORY_SSH_URL" .
+    git fetch origin --prune
+    base_branch="$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||')"
+    git checkout -B "$SYMPHONY_BRANCH" "origin/$base_branch"
+  before_run: |
+    set -eu
+    git fetch origin --prune
+  after_run: |
+    set -eu
+    if [ -z "$(git status --porcelain)" ]; then
+      exit 0
+    fi
+    git add -A
+    git commit -m "$SYMPHONY_ISSUE_IDENTIFIER: agent update"
+    git push -u origin "$SYMPHONY_BRANCH"
+    gh pr view "$SYMPHONY_BRANCH" --repo "$SYMPHONY_REPOSITORY" >/dev/null 2>&1 || \
+      gh pr create --repo "$SYMPHONY_REPOSITORY" --head "$SYMPHONY_BRANCH" \
+        --title "$SYMPHONY_ISSUE_TITLE" --body "Automated work for $SYMPHONY_ISSUE_URL"
 agent:
   max_concurrent_agents: 4
   max_turns: 20

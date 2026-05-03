@@ -18,12 +18,13 @@ type Definition struct {
 }
 
 type Config struct {
-	Tracker       TrackerConfig
-	Polling       PollingConfig
-	Workspace     WorkspaceConfig
-	Hooks         HooksConfig
-	Agent         AgentConfig
-	Observability ObservabilityConfig
+	Tracker       TrackerConfig       `yaml:"tracker"`
+	PullRequest   PullRequestConfig   `yaml:"pull_request"`
+	Polling       PollingConfig       `yaml:"polling"`
+	Workspace     WorkspaceConfig     `yaml:"workspace"`
+	Hooks         HooksConfig         `yaml:"hooks"`
+	Agent         AgentConfig         `yaml:"agent"`
+	Observability ObservabilityConfig `yaml:"observability"`
 }
 
 type TrackerConfig struct {
@@ -54,8 +55,19 @@ type PollingConfig struct {
 	IntervalMS int `yaml:"interval_ms"`
 }
 
+type PullRequestConfig struct {
+	AutoMerge            bool     `yaml:"auto_merge"`
+	MergeMethod          string   `yaml:"merge_method"`
+	AllowDraft           bool     `yaml:"allow_draft"`
+	RequireApproval      bool     `yaml:"require_approval"`
+	RequirePassingChecks bool     `yaml:"require_passing_checks"`
+	RequiredCheckNames   []string `yaml:"required_check_names"`
+}
+
 type WorkspaceConfig struct {
-	Root string `yaml:"root"`
+	Root                  string `yaml:"root"`
+	CleanupOrphans        bool   `yaml:"cleanup_orphans"`
+	CleanupStaleAfterDays int    `yaml:"cleanup_stale_after_days"`
 }
 
 type HooksConfig struct {
@@ -154,6 +166,11 @@ func defaultConfig() Config {
 			MonitorStates:         []string{"Human Review", "Merging"},
 			TerminalStates:        []string{"Done", "Closed", "Cancelled", "Canceled", "Duplicate"},
 		},
+		PullRequest: PullRequestConfig{
+			MergeMethod:          "SQUASH",
+			RequireApproval:      true,
+			RequirePassingChecks: true,
+		},
 		Polling: PollingConfig{IntervalMS: int((30 * time.Second) / time.Millisecond)},
 		Workspace: WorkspaceConfig{
 			Root: filepath.Join(os.TempDir(), "symphony-workspaces"),
@@ -210,6 +227,19 @@ func (c *Config) Resolve() error {
 	}
 	if c.Polling.IntervalMS <= 0 {
 		c.Polling.IntervalMS = int((30 * time.Second) / time.Millisecond)
+	}
+	c.PullRequest.MergeMethod = strings.ToUpper(strings.TrimSpace(c.PullRequest.MergeMethod))
+	if c.PullRequest.MergeMethod == "" {
+		c.PullRequest.MergeMethod = "SQUASH"
+	}
+	switch c.PullRequest.MergeMethod {
+	case "MERGE", "SQUASH", "REBASE":
+	default:
+		return fmt.Errorf("pull_request.merge_method must be MERGE, SQUASH, or REBASE, got %q", c.PullRequest.MergeMethod)
+	}
+	c.PullRequest.RequiredCheckNames = trimList(c.PullRequest.RequiredCheckNames)
+	if c.Workspace.CleanupStaleAfterDays < 0 {
+		return errors.New("workspace.cleanup_stale_after_days must be >= 0")
 	}
 	if c.Agent.MaxConcurrentAgents <= 0 {
 		c.Agent.MaxConcurrentAgents = 4
@@ -268,6 +298,24 @@ func normalizeList(values []string) []string {
 		}
 		seen[normalized] = struct{}{}
 		out = append(out, normalized)
+	}
+	return out
+}
+
+func trimList(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
 	}
 	return out
 }

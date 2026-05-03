@@ -19,6 +19,12 @@ type Manager struct {
 	Hooks workflow.HooksConfig
 }
 
+type Entry struct {
+	Name    string
+	Path    string
+	ModTime time.Time
+}
+
 func (m Manager) Ensure(ctx context.Context, issue tracker.Issue, timeout time.Duration) (string, bool, error) {
 	if m.Root == "" {
 		return "", false, fmt.Errorf("workspace root is empty")
@@ -63,6 +69,48 @@ func (m Manager) Remove(ctx context.Context, identifier string, timeout time.Dur
 		_ = runHook(ctx, path, m.Hooks.BeforeRemove, issue, timeout)
 	}
 	return os.RemoveAll(path)
+}
+
+func (m Manager) RemoveEntry(ctx context.Context, entry Entry, timeout time.Duration) error {
+	if strings.TrimSpace(m.Hooks.BeforeRemove) != "" {
+		issue := tracker.Issue{Identifier: entry.Name}
+		_ = runHook(ctx, entry.Path, m.Hooks.BeforeRemove, issue, timeout)
+	}
+	return os.RemoveAll(entry.Path)
+}
+
+func (m Manager) List() ([]Entry, error) {
+	root, err := filepath.Abs(m.Root)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Entry, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, Entry{
+			Name:    entry.Name(),
+			Path:    filepath.Join(root, entry.Name()),
+			ModTime: info.ModTime(),
+		})
+	}
+	return out, nil
+}
+
+func NameForIssue(identifier string) string {
+	return safeIdentifier(identifier)
 }
 
 func RunBefore(ctx context.Context, path string, hooks workflow.HooksConfig, issue tracker.Issue, timeout time.Duration) error {
