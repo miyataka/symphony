@@ -134,6 +134,8 @@ When linked PR data is present, Symphony applies two conservative state transiti
 
 - `tracker.handoff_state` moves to `tracker.rework_state` if any linked PR has requested changes
   or unresolved review threads.
+- `tracker.handoff_state` moves to `tracker.merging_state` if any linked PR is open, non-draft,
+  approved, and has passing checks.
 - `tracker.merging_state` moves to `tracker.done_state` if any linked PR is merged.
 
 ## Testing

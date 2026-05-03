@@ -58,6 +58,14 @@ func (p PullRequest) IsMerged() bool {
 	return p.State == "MERGED"
 }
 
+func (p PullRequest) ReadyForMerge() bool {
+	return p.State == "OPEN" &&
+		!p.IsDraft &&
+		p.ReviewDecision == "APPROVED" &&
+		p.ChecksPassing() &&
+		!p.HasActionableFeedback()
+}
+
 type Tracker interface {
 	FetchCandidateIssues(context.Context) ([]Issue, error)
 	FetchIssuesByStates(context.Context, []string) ([]Issue, error)

@@ -128,6 +128,10 @@ func (s *Service) applyReviewStatePolicy(ctx context.Context, issue tracker.Issu
 			s.moveIssueWithWorkpad(ctx, issue, s.cfg.Tracker.ReworkState, "Linked PR has actionable review feedback.")
 			return true
 		}
+		if issueHasReadyPR(issue) {
+			s.moveIssueWithWorkpad(ctx, issue, s.cfg.Tracker.MergingState, "Linked PR is approved and checks are passing.")
+			return true
+		}
 	case sameState(issue.State, s.cfg.Tracker.MergingState):
 		if issueHasMergedPR(issue) {
 			s.moveIssueWithWorkpad(ctx, issue, s.cfg.Tracker.DoneState, "Linked PR is merged.")
@@ -493,6 +497,15 @@ func issueHasActionablePRFeedback(issue tracker.Issue) bool {
 func issueHasMergedPR(issue tracker.Issue) bool {
 	for _, pr := range issue.PullRequests {
 		if pr.IsMerged() {
+			return true
+		}
+	}
+	return false
+}
+
+func issueHasReadyPR(issue tracker.Issue) bool {
+	for _, pr := range issue.PullRequests {
+		if pr.ReadyForMerge() {
 			return true
 		}
 	}
