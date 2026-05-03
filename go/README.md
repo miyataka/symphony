@@ -64,6 +64,7 @@ tracker:
   workpad_marker: "## Codex Workpad"
   read_issue_dependencies: true
   active_states: [Todo, In Progress, Rework, Merging]
+  monitor_states: [Human Review]
   terminal_states: [Done, Closed, Cancelled, Canceled, Duplicate]
 workspace:
   root: ~/code/symphony-workspaces
@@ -106,6 +107,10 @@ When the tracker supports writeback, Symphony updates the configured `status_fie
 - `Todo` items move to `tracker.start_state` before dispatch
 - successful active runs move to `tracker.handoff_state`
 
+`tracker.monitor_states` are polled for writeback policies but do not dispatch agents. This lets
+Symphony watch `Human Review` for requested changes without starting another run while review is
+still pending.
+
 It also creates or updates one issue comment containing `tracker.workpad_marker`, defaulting to
 `## Codex Workpad`. This comment is the handoff surface for workspace path, status, and execution
 notes.
@@ -139,6 +144,5 @@ make all
 
 ## Current limitations
 
-- The GitHub adapter does not yet attach PR links or run PR feedback sweeps.
 - The Codex app-server JSON-RPC protocol is not implemented yet. Use `agent.command` as the bridge
   to Codex or another coding agent.

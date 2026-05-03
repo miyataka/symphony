@@ -21,6 +21,8 @@ tracker:
     - In Progress
     - Rework
     - Merging
+  monitor_states:
+    - Human Review
   terminal_states:
     - Done
     - Closed

@@ -153,6 +153,9 @@ func (s *Service) canDispatch(issue tracker.Issue) bool {
 	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" {
 		return false
 	}
+	if !s.activeState(issue.State) {
+		return false
+	}
 	if len(issue.BlockedBy) > 0 {
 		return false
 	}

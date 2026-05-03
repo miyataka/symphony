@@ -83,6 +83,29 @@ func TestApplyReviewStatePolicyMovesMergingToDoneWhenPRMerged(t *testing.T) {
 	}
 }
 
+func TestCanDispatchRequiresActiveState(t *testing.T) {
+	service := New(Options{
+		Config:  testConfig(),
+		Tracker: &recordingTracker{},
+	})
+	if service.canDispatch(tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "Human Review",
+	}) {
+		t.Fatal("expected monitor-only state not to dispatch")
+	}
+	if !service.canDispatch(tracker.Issue{
+		ID:         "I_2",
+		Identifier: "repo#2",
+		Title:      "Issue",
+		State:      "Todo",
+	}) {
+		t.Fatal("expected active state to dispatch")
+	}
+}
+
 func testConfig() workflow.Config {
 	cfg, err := workflow.ParseConfig(map[string]any{
 		"tracker": map[string]any{

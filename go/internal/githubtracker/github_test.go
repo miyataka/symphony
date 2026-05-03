@@ -105,6 +105,17 @@ func TestFetchIssuesByStatesNormalizesProjectIssues(t *testing.T) {
 	}
 }
 
+func TestIssueFetchStatesIncludesMonitorStates(t *testing.T) {
+	states := issueFetchStates(workflow.TrackerConfig{
+		ActiveStates:  []string{"Todo", "In Progress"},
+		MonitorStates: []string{"Human Review", "todo"},
+	})
+	want := []string{"Todo", "In Progress", "Human Review"}
+	if strings.Join(states, ",") != strings.Join(want, ",") {
+		t.Fatalf("unexpected states: %#v", states)
+	}
+}
+
 func TestFetchIssuesByStatesNormalizesLinkedPullRequests(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
