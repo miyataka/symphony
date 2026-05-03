@@ -54,6 +54,10 @@ func (p PullRequest) ChecksPassing() bool {
 	return p.StatusCheckRollupState == "" || p.StatusCheckRollupState == "SUCCESS"
 }
 
+func (p PullRequest) IsMerged() bool {
+	return p.State == "MERGED"
+}
+
 type Tracker interface {
 	FetchCandidateIssues(context.Context) ([]Issue, error)
 	FetchIssuesByStates(context.Context, []string) ([]Issue, error)

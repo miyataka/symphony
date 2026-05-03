@@ -11,6 +11,9 @@ tracker:
     - miyataka/symphony
   start_state: In Progress
   handoff_state: Human Review
+  rework_state: Rework
+  merging_state: Merging
+  done_state: Done
   workpad_marker: "## Codex Workpad"
   read_issue_dependencies: true
   active_states:

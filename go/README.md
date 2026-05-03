@@ -58,6 +58,9 @@ tracker:
     - miyataka/frontend
   start_state: In Progress
   handoff_state: Human Review
+  rework_state: Rework
+  merging_state: Merging
+  done_state: Done
   workpad_marker: "## Codex Workpad"
   read_issue_dependencies: true
   active_states: [Todo, In Progress, Rework, Merging]
@@ -119,6 +122,14 @@ Symphony also reads pull requests referenced by GitHub's `closedByPullRequestsRe
 exposes them through `.Issue.PullRequests`. Each PR includes review decision, merge state, status
 check rollup state, comment count, and unresolved review thread count so workflows can decide
 whether to hand off, rework, or wait.
+
+## Review state policy
+
+When linked PR data is present, Symphony applies two conservative state transitions:
+
+- `tracker.handoff_state` moves to `tracker.rework_state` if any linked PR has requested changes
+  or unresolved review threads.
+- `tracker.merging_state` moves to `tracker.done_state` if any linked PR is merged.
 
 ## Testing
 

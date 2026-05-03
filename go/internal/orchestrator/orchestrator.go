@@ -100,6 +100,9 @@ func (s *Service) poll(ctx context.Context) error {
 	}
 	sortIssues(issues)
 	for _, issue := range issues {
+		if s.applyReviewStatePolicy(ctx, issue) {
+			continue
+		}
 		if !s.canDispatch(issue) {
 			continue
 		}
@@ -113,6 +116,37 @@ func (s *Service) poll(ctx context.Context) error {
 		s.dispatch(ctx, issue, 0)
 	}
 	return nil
+}
+
+func (s *Service) applyReviewStatePolicy(ctx context.Context, issue tracker.Issue) bool {
+	if len(issue.PullRequests) == 0 {
+		return false
+	}
+	switch {
+	case sameState(issue.State, s.cfg.Tracker.HandoffState):
+		if issueHasActionablePRFeedback(issue) {
+			s.moveIssueWithWorkpad(ctx, issue, s.cfg.Tracker.ReworkState, "Linked PR has actionable review feedback.")
+			return true
+		}
+	case sameState(issue.State, s.cfg.Tracker.MergingState):
+		if issueHasMergedPR(issue) {
+			s.moveIssueWithWorkpad(ctx, issue, s.cfg.Tracker.DoneState, "Linked PR is merged.")
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) moveIssueWithWorkpad(ctx context.Context, issue tracker.Issue, state, note string) {
+	if state == "" || sameState(issue.State, state) {
+		return
+	}
+	if err := s.updateIssueState(ctx, issue, state); err != nil {
+		s.logger.Warn("failed to apply review state policy", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "state", state, "error", err)
+		return
+	}
+	issue.State = state
+	s.upsertWorkpad(ctx, issue, workpadBody(issue, state, "", note))
 }
 
 func (s *Service) canDispatch(issue tracker.Issue) bool {
@@ -442,6 +476,24 @@ func normalize(value string) string {
 
 func sameState(left, right string) bool {
 	return normalize(left) == normalize(right)
+}
+
+func issueHasActionablePRFeedback(issue tracker.Issue) bool {
+	for _, pr := range issue.PullRequests {
+		if pr.HasActionableFeedback() {
+			return true
+		}
+	}
+	return false
+}
+
+func issueHasMergedPR(issue tracker.Issue) bool {
+	for _, pr := range issue.PullRequests {
+		if pr.IsMerged() {
+			return true
+		}
+	}
+	return false
 }
 
 func workpadBody(issue tracker.Issue, status, workspacePath, note string) string {
