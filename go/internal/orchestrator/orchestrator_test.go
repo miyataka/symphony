@@ -60,6 +60,60 @@ func TestApplyReviewStatePolicyMovesHumanReviewToRework(t *testing.T) {
 	}
 }
 
+func TestApplyReviewStatePolicyMovesHumanReviewToMergingWhenPRReady(t *testing.T) {
+	recorder := &recordingTracker{}
+	service := New(Options{
+		Config:  testConfig(),
+		Tracker: recorder,
+	})
+	handled := service.applyReviewStatePolicy(context.Background(), tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "Human Review",
+		PullRequests: []tracker.PullRequest{{
+			State:                  "OPEN",
+			ReviewDecision:         "APPROVED",
+			StatusCheckRollupState: "SUCCESS",
+		}},
+	})
+	if !handled {
+		t.Fatal("expected policy to handle issue")
+	}
+	if recorder.updatedState != "Merging" {
+		t.Fatalf("unexpected updated state: %q", recorder.updatedState)
+	}
+	if recorder.workpad == "" {
+		t.Fatal("expected workpad update")
+	}
+}
+
+func TestApplyReviewStatePolicyDoesNotMoveHumanReviewWhenReadyPRIsDraft(t *testing.T) {
+	recorder := &recordingTracker{}
+	service := New(Options{
+		Config:  testConfig(),
+		Tracker: recorder,
+	})
+	handled := service.applyReviewStatePolicy(context.Background(), tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "Human Review",
+		PullRequests: []tracker.PullRequest{{
+			State:                  "OPEN",
+			IsDraft:                true,
+			ReviewDecision:         "APPROVED",
+			StatusCheckRollupState: "SUCCESS",
+		}},
+	})
+	if handled {
+		t.Fatal("expected policy not to handle draft PR")
+	}
+	if recorder.updatedState != "" {
+		t.Fatalf("unexpected updated state: %q", recorder.updatedState)
+	}
+}
+
 func TestApplyReviewStatePolicyMovesMergingToDoneWhenPRMerged(t *testing.T) {
 	recorder := &recordingTracker{}
 	service := New(Options{
