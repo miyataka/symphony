@@ -54,6 +54,10 @@ func (p PullRequest) ChecksPassing() bool {
 	return p.StatusCheckRollupState == "" || p.StatusCheckRollupState == "SUCCESS"
 }
 
+func (p PullRequest) ChecksFailing() bool {
+	return p.StatusCheckRollupState == "FAILURE" || p.StatusCheckRollupState == "ERROR"
+}
+
 func (p PullRequest) IsMerged() bool {
 	return p.State == "MERGED"
 }
