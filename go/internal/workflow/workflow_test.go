@@ -53,7 +53,12 @@ func TestParseConfigResolvesEnvAndDefaults(t *testing.T) {
 	if !cfg.Tracker.ReadIssueDependencies {
 		t.Fatal("expected issue dependency reads to default on")
 	}
-	if len(cfg.Tracker.MonitorStates) != 1 || cfg.Tracker.MonitorStates[0] != "Human Review" {
+	if len(cfg.Tracker.ActiveStates) != 3 || cfg.Tracker.ActiveStates[2] != "Rework" {
+		t.Fatalf("unexpected active states: %#v", cfg.Tracker.ActiveStates)
+	}
+	if len(cfg.Tracker.MonitorStates) != 2 ||
+		cfg.Tracker.MonitorStates[0] != "Human Review" ||
+		cfg.Tracker.MonitorStates[1] != "Merging" {
 		t.Fatalf("unexpected monitor states: %#v", cfg.Tracker.MonitorStates)
 	}
 	if len(cfg.Tracker.AllowedRepositories) != 2 ||

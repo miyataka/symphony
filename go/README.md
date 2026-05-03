@@ -63,8 +63,8 @@ tracker:
   done_state: Done
   workpad_marker: "## Codex Workpad"
   read_issue_dependencies: true
-  active_states: [Todo, In Progress, Rework, Merging]
-  monitor_states: [Human Review]
+  active_states: [Todo, In Progress, Rework]
+  monitor_states: [Human Review, Merging]
   terminal_states: [Done, Closed, Cancelled, Canceled, Duplicate]
 workspace:
   root: ~/code/symphony-workspaces
@@ -108,8 +108,8 @@ When the tracker supports writeback, Symphony updates the configured `status_fie
 - successful active runs move to `tracker.handoff_state`
 
 `tracker.monitor_states` are polled for writeback policies but do not dispatch agents. This lets
-Symphony watch `Human Review` for requested changes without starting another run while review is
-still pending.
+Symphony watch `Human Review` for requested changes and `Merging` for completed PRs without
+starting another run while review or merge is still pending.
 
 It also creates or updates one issue comment containing `tracker.workpad_marker`, defaulting to
 `## Codex Workpad`. This comment is the handoff surface for workspace path, status, and execution

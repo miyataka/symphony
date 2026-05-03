@@ -157,7 +157,7 @@ func (s *Service) canDispatch(issue tracker.Issue) bool {
 	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" {
 		return false
 	}
-	if !s.activeState(issue.State) {
+	if !s.dispatchState(issue.State) {
 		return false
 	}
 	if len(issue.BlockedBy) > 0 {
@@ -317,7 +317,7 @@ func (s *Service) refreshIssue(ctx context.Context, id string) (tracker.Issue, b
 		return tracker.Issue{}, false, nil
 	}
 	issue := issues[0]
-	return issue, s.activeState(issue.State), nil
+	return issue, s.dispatchState(issue.State), nil
 }
 
 func (s *Service) reconcileRunning(ctx context.Context) {
@@ -344,7 +344,7 @@ func (s *Service) reconcileRunning(ctx context.Context) {
 	defer s.mu.Unlock()
 	for id, handle := range s.running {
 		issue, ok := visible[id]
-		if !ok || !s.activeState(issue.State) {
+		if !ok || !s.dispatchState(issue.State) {
 			s.logger.Info("stopping ineligible issue", "issue_id", id, "issue_identifier", handle.issue.Identifier)
 			handle.cancel()
 			continue
@@ -384,6 +384,20 @@ func (s *Service) activeState(state string) bool {
 		}
 	}
 	return false
+}
+
+func (s *Service) monitorState(state string) bool {
+	state = normalize(state)
+	for _, monitor := range s.cfg.Tracker.MonitorStates {
+		if normalize(monitor) == state {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) dispatchState(state string) bool {
+	return s.activeState(state) && !s.monitorState(state)
 }
 
 func (s *Service) todoState(state string) bool {

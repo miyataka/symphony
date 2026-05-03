@@ -150,13 +150,39 @@ func TestCanDispatchRequiresActiveState(t *testing.T) {
 	}) {
 		t.Fatal("expected monitor-only state not to dispatch")
 	}
-	if !service.canDispatch(tracker.Issue{
+	if service.canDispatch(tracker.Issue{
 		ID:         "I_2",
 		Identifier: "repo#2",
+		Title:      "Issue",
+		State:      "Merging",
+	}) {
+		t.Fatal("expected merging state not to dispatch")
+	}
+	if !service.canDispatch(tracker.Issue{
+		ID:         "I_3",
+		Identifier: "repo#3",
 		Title:      "Issue",
 		State:      "Todo",
 	}) {
 		t.Fatal("expected active state to dispatch")
+	}
+}
+
+func TestCanDispatchPrefersMonitorStateOverActiveState(t *testing.T) {
+	cfg := testConfig()
+	cfg.Tracker.ActiveStates = append(cfg.Tracker.ActiveStates, "Waiting")
+	cfg.Tracker.MonitorStates = append(cfg.Tracker.MonitorStates, "Waiting")
+	service := New(Options{
+		Config:  cfg,
+		Tracker: &recordingTracker{},
+	})
+	if service.canDispatch(tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "Waiting",
+	}) {
+		t.Fatal("expected monitor state not to dispatch even when also active")
 	}
 }
 
