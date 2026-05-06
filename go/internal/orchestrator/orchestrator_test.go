@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -299,6 +300,30 @@ func TestCanDispatchPrefersMonitorStateOverActiveState(t *testing.T) {
 		State:      "Waiting",
 	}) {
 		t.Fatal("expected monitor state not to dispatch even when also active")
+	}
+}
+
+func TestRunIssuePropagatesAfterRunHookFailure(t *testing.T) {
+	cfg := testConfig()
+	cfg.Workspace.Root = t.TempDir()
+	cfg.Agent.Command = ""
+	cfg.Hooks.AfterRun = "exit 7"
+	service := New(Options{
+		Config:  cfg,
+		Tracker: &recordingTracker{},
+	})
+
+	err := service.runIssue(context.Background(), tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "In Progress",
+	})
+	if err == nil {
+		t.Fatal("expected after_run failure")
+	}
+	if !strings.Contains(err.Error(), "after_run hook") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

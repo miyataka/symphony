@@ -109,13 +109,19 @@ hooks:
     git fetch origin --prune
     base_branch="$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||')"
     git checkout -B "$SYMPHONY_BRANCH" "origin/$base_branch"
+    {
+      echo ".symphony/"
+      echo ".tmp/"
+    } >> .git/info/exclude
   before_run: |
     git fetch origin --prune
   after_run: |
-    if [ -z "$(git status --porcelain)" ]; then
-      exit 0
+    changes="$(git status --porcelain -- . ':(exclude).symphony' ':(exclude).tmp')"
+    if [ -z "$changes" ]; then
+      echo "no non-Symphony workspace changes to commit" >&2
+      exit 1
     fi
-    git add -A
+    git add -A -- . ':(exclude).symphony' ':(exclude).tmp'
     git commit -m "$SYMPHONY_ISSUE_IDENTIFIER: agent update"
     git push -u origin "$SYMPHONY_BRANCH"
     gh pr view "$SYMPHONY_BRANCH" --repo "$SYMPHONY_REPOSITORY" >/dev/null 2>&1 || \
@@ -125,7 +131,9 @@ agent:
   max_concurrent_agents: 4
   max_turns: 20
   command: |
-    codex exec --skip-git-repo-check < "$SYMPHONY_PROMPT_FILE"
+    mkdir -p .tmp
+    TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp" \
+      codex exec --sandbox workspace-write --skip-git-repo-check < "$SYMPHONY_PROMPT_FILE"
 ---
 
 You are working on GitHub issue {{ .Issue.Identifier }}.

@@ -254,10 +254,14 @@ func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) error {
 			return fmt.Errorf("before_run hook: %w", err)
 		}
 		if err := s.runAgentTurn(ctx, path, issue, turn); err != nil {
-			workspace.RunAfter(ctx, path, s.cfg.Hooks, issue, s.cfg.HookTimeout())
+			if afterErr := workspace.RunAfter(ctx, path, s.cfg.Hooks, issue, s.cfg.HookTimeout()); afterErr != nil {
+				return errors.Join(err, fmt.Errorf("after_run hook: %w", afterErr))
+			}
 			return err
 		}
-		workspace.RunAfter(ctx, path, s.cfg.Hooks, issue, s.cfg.HookTimeout())
+		if err := workspace.RunAfter(ctx, path, s.cfg.Hooks, issue, s.cfg.HookTimeout()); err != nil {
+			return fmt.Errorf("after_run hook: %w", err)
+		}
 		s.upsertWorkpad(ctx, issue, workpadBody(issue, "Running", path, fmt.Sprintf("Completed turn %d.", turn)))
 
 		refreshed, active, err := s.refreshIssue(ctx, issue.ID)
