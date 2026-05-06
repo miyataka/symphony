@@ -26,30 +26,31 @@ type Entry struct {
 }
 
 func (m Manager) Ensure(ctx context.Context, issue tracker.Issue, timeout time.Duration) (string, bool, error) {
-	if m.Root == "" {
-		return "", false, fmt.Errorf("workspace root is empty")
-	}
-	root, err := filepath.Abs(m.Root)
+	root, err := canonicalRoot(m.Root)
 	if err != nil {
-		return "", false, err
-	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", false, err
 	}
 
 	path := filepath.Join(root, safeIdentifier(issue.Identifier))
+	canonicalPath, exists, err := validateWorkspacePath(path, root)
+	if err != nil {
+		return "", false, err
+	}
+	path = canonicalPath
 	created := false
-	if stat, err := os.Stat(path); err == nil {
+	if exists {
+		stat, err := os.Stat(path)
+		if err != nil {
+			return "", false, err
+		}
 		if !stat.IsDir() {
 			if err := os.RemoveAll(path); err != nil {
 				return "", false, err
 			}
 			created = true
 		}
-	} else if os.IsNotExist(err) {
-		created = true
 	} else {
-		return "", false, err
+		created = true
 	}
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return "", false, err
@@ -63,7 +64,14 @@ func (m Manager) Ensure(ctx context.Context, issue tracker.Issue, timeout time.D
 }
 
 func (m Manager) Remove(ctx context.Context, identifier string, timeout time.Duration) error {
-	path := filepath.Join(m.Root, safeIdentifier(identifier))
+	root, err := canonicalRoot(m.Root)
+	if err != nil {
+		return err
+	}
+	path, _, err := validateWorkspacePath(filepath.Join(root, safeIdentifier(identifier)), root)
+	if err != nil {
+		return err
+	}
 	if strings.TrimSpace(m.Hooks.BeforeRemove) != "" {
 		issue := tracker.Issue{Identifier: identifier}
 		_ = runHook(ctx, path, m.Hooks.BeforeRemove, issue, timeout)
@@ -72,15 +80,23 @@ func (m Manager) Remove(ctx context.Context, identifier string, timeout time.Dur
 }
 
 func (m Manager) RemoveEntry(ctx context.Context, entry Entry, timeout time.Duration) error {
+	root, err := canonicalRoot(m.Root)
+	if err != nil {
+		return err
+	}
+	path, _, err := validateWorkspacePath(entry.Path, root)
+	if err != nil {
+		return err
+	}
 	if strings.TrimSpace(m.Hooks.BeforeRemove) != "" {
 		issue := tracker.Issue{Identifier: entry.Name}
-		_ = runHook(ctx, entry.Path, m.Hooks.BeforeRemove, issue, timeout)
+		_ = runHook(ctx, path, m.Hooks.BeforeRemove, issue, timeout)
 	}
-	return os.RemoveAll(entry.Path)
+	return os.RemoveAll(path)
 }
 
 func (m Manager) List() ([]Entry, error) {
-	root, err := filepath.Abs(m.Root)
+	root, err := canonicalRoot(m.Root)
 	if err != nil {
 		return nil, err
 	}
@@ -107,6 +123,70 @@ func (m Manager) List() ([]Entry, error) {
 		})
 	}
 	return out, nil
+}
+
+func canonicalRoot(rawRoot string) (string, error) {
+	if strings.TrimSpace(rawRoot) == "" {
+		return "", fmt.Errorf("workspace root is empty")
+	}
+	root, err := filepath.Abs(rawRoot)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", err
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(root), nil
+}
+
+func validateWorkspacePath(path, root string) (string, bool, error) {
+	cleanRoot := filepath.Clean(root)
+	cleanPath := filepath.Clean(path)
+	if !filepath.IsAbs(cleanPath) {
+		absPath, err := filepath.Abs(cleanPath)
+		if err != nil {
+			return "", false, err
+		}
+		cleanPath = filepath.Clean(absPath)
+	}
+
+	canonicalPath, err := filepath.EvalSymlinks(cleanPath)
+	switch {
+	case err == nil:
+		canonicalPath = filepath.Clean(canonicalPath)
+		if canonicalPath == cleanRoot {
+			return "", true, fmt.Errorf("workspace equals root: path=%q root=%q", canonicalPath, cleanRoot)
+		}
+		if !pathWithinRoot(canonicalPath, cleanRoot) {
+			return "", true, fmt.Errorf("workspace resolves outside root: path=%q root=%q", canonicalPath, cleanRoot)
+		}
+		return canonicalPath, true, nil
+	case os.IsNotExist(err):
+		if !pathWithinRoot(cleanPath, cleanRoot) {
+			return "", false, fmt.Errorf("workspace resolves outside root: path=%q root=%q", cleanPath, cleanRoot)
+		}
+		if cleanPath == cleanRoot {
+			return "", false, fmt.Errorf("workspace equals root: path=%q root=%q", cleanPath, cleanRoot)
+		}
+		return cleanPath, false, nil
+	default:
+		return "", false, err
+	}
+}
+
+func pathWithinRoot(path, root string) bool {
+	if path == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func NameForIssue(identifier string) string {
@@ -147,5 +227,9 @@ func safeIdentifier(value string) string {
 		value = "issue"
 	}
 	value = unsafeIdentifier.ReplaceAllString(value, "_")
-	return strings.Trim(value, "._-")
+	value = strings.Trim(value, "._-")
+	if value == "" {
+		return "issue"
+	}
+	return value
 }
