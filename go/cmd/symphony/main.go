@@ -42,14 +42,14 @@ func run(args []string) {
 	fs.StringVar(&workflowPath, "workflow", "WORKFLOW.md", "path to workflow markdown file")
 	fs.Parse(args)
 
-	logger := newLogger(false)
+	logger := newLogger(false, "info")
 
 	def, cfg, err := loadWorkflow(workflowPath)
 	if err != nil {
 		logger.Error("failed to load workflow", "path", workflowPath, "error", err)
 		os.Exit(1)
 	}
-	logger = newLogger(cfg.Observability.LogJSON)
+	logger = newLogger(cfg.Observability.LogJSON, cfg.Observability.LogLevel)
 
 	tracker, err := githubtracker.NewWithLogger(cfg.Tracker, logger.With("component", "githubtracker"))
 	if err != nil {
@@ -73,12 +73,25 @@ func run(args []string) {
 	}
 }
 
-func newLogger(logJSON bool) *slog.Logger {
-	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+func newLogger(logJSON bool, levelName string) *slog.Logger {
+	opts := &slog.HandlerOptions{Level: slogLevel(levelName)}
 	if logJSON {
 		return slog.New(slog.NewJSONHandler(os.Stdout, opts))
 	}
 	return slog.New(slog.NewTextHandler(os.Stdout, opts))
+}
+
+func slogLevel(name string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 func setupGitHubProject(args []string) {

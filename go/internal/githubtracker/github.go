@@ -339,7 +339,7 @@ func (c *Client) logFetchSummary(states []string, summary fetchSummary, matched 
 	if c.logger == nil {
 		return
 	}
-	c.logger.Info(
+	c.logger.Debug(
 		"github project scan completed",
 		"owner", c.cfg.Owner,
 		"owner_type", c.cfg.OwnerType,
