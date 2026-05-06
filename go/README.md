@@ -31,13 +31,13 @@ tracker.
 ```bash
 cd go
 export GITHUB_TOKEN=...
-go run ./cmd/symphony --workflow ./WORKFLOW.github.md
+go run ./cmd/symphony ./WORKFLOW.github.md
 ```
 
 To print setup commands for a GitHub Project:
 
 ```bash
-go run ./cmd/symphony setup-github-project --workflow ./WORKFLOW.github.md
+go run ./cmd/symphony setup-github-project ./WORKFLOW.github.md
 ```
 
 ## Logging
@@ -50,7 +50,7 @@ items, missing Status values, state mismatches, assignee mismatches, and reposit
 To keep a local log file:
 
 ```bash
-go run ./cmd/symphony --workflow ./WORKFLOW.github.md 2>&1 | tee symphony.log
+go run ./cmd/symphony ./WORKFLOW.github.md 2>&1 | tee symphony.log
 ```
 
 Use JSON logs or enable debug logging by adding this to the workflow front matter:

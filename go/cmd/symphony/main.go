@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -16,31 +18,24 @@ import (
 )
 
 func main() {
-	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
-		switch os.Args[1] {
-		case "run":
-			run(os.Args[2:])
-			return
-		case "setup-github-project":
-			setupGitHubProject(os.Args[2:])
-			return
-		case "help", "-h", "--help":
-			printUsage()
-			return
-		default:
-			fmt.Fprintf(os.Stderr, "unknown command %q\n\n", os.Args[1])
-			printUsage()
-			os.Exit(2)
-		}
+	command, args, help := parseCommand(os.Args[1:])
+	if help {
+		printUsage()
+		return
 	}
-	run(os.Args[1:])
+	switch command {
+	case "run":
+		run(args)
+	case "setup-github-project":
+		setupGitHubProject(args)
+	}
 }
 
 func run(args []string) {
-	var workflowPath string
-	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	fs.StringVar(&workflowPath, "workflow", "WORKFLOW.md", "path to workflow markdown file")
-	fs.Parse(args)
+	workflowPath, err := parseWorkflowPath("run", args)
+	if err != nil {
+		handleArgumentError(err)
+	}
 
 	logger := newLogger(false, "info")
 
@@ -95,10 +90,10 @@ func slogLevel(name string) slog.Level {
 }
 
 func setupGitHubProject(args []string) {
-	var workflowPath string
-	fs := flag.NewFlagSet("setup-github-project", flag.ExitOnError)
-	fs.StringVar(&workflowPath, "workflow", "WORKFLOW.md", "path to workflow markdown file")
-	fs.Parse(args)
+	workflowPath, err := parseWorkflowPath("setup-github-project", args)
+	if err != nil {
+		handleArgumentError(err)
+	}
 
 	cfg, err := loadWorkflowForSetup(workflowPath)
 	if err != nil {
@@ -106,6 +101,61 @@ func setupGitHubProject(args []string) {
 		os.Exit(1)
 	}
 	printGitHubProjectSetup(cfg)
+}
+
+func parseCommand(args []string) (string, []string, bool) {
+	if len(args) == 0 {
+		return "run", args, false
+	}
+	switch args[0] {
+	case "run":
+		return "run", args[1:], false
+	case "setup-github-project":
+		return "setup-github-project", args[1:], false
+	case "help", "-h", "--help":
+		return "", nil, true
+	default:
+		return "run", args, false
+	}
+}
+
+func parseWorkflowPath(command string, args []string) (string, error) {
+	var workflowPath string
+	fs := flag.NewFlagSet(command, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&workflowPath, "workflow", "WORKFLOW.md", "path to workflow markdown file")
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+
+	workflowFlagSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "workflow" {
+			workflowFlagSet = true
+		}
+	})
+	positionals := fs.Args()
+	switch len(positionals) {
+	case 0:
+		return workflowPath, nil
+	case 1:
+		if workflowFlagSet {
+			return "", fmt.Errorf("workflow path specified by both --workflow and positional argument")
+		}
+		return positionals[0], nil
+	default:
+		return "", fmt.Errorf("expected at most one workflow path, got %d", len(positionals))
+	}
+}
+
+func handleArgumentError(err error) {
+	if errors.Is(err, flag.ErrHelp) {
+		printUsage()
+		os.Exit(0)
+	}
+	fmt.Fprintf(os.Stderr, "%v\n\n", err)
+	printUsage()
+	os.Exit(2)
 }
 
 func loadWorkflow(path string) (workflow.Definition, workflow.Config, error) {
@@ -199,8 +249,8 @@ func uniqueStrings(values []string) []string {
 
 func printUsage() {
 	fmt.Fprintf(os.Stderr, `Usage:
-  symphony [--workflow WORKFLOW.md]
-  symphony run [--workflow WORKFLOW.md]
-  symphony setup-github-project [--workflow WORKFLOW.md]
+  symphony [--workflow WORKFLOW.md] [WORKFLOW.md]
+  symphony run [--workflow WORKFLOW.md] [WORKFLOW.md]
+  symphony setup-github-project [--workflow WORKFLOW.md] [WORKFLOW.md]
 `)
 }
