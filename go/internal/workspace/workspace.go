@@ -120,11 +120,11 @@ func RunBefore(ctx context.Context, path string, hooks workflow.HooksConfig, iss
 	return runHook(ctx, path, hooks.BeforeRun, issue, timeout)
 }
 
-func RunAfter(ctx context.Context, path string, hooks workflow.HooksConfig, issue tracker.Issue, timeout time.Duration) {
+func RunAfter(ctx context.Context, path string, hooks workflow.HooksConfig, issue tracker.Issue, timeout time.Duration) error {
 	if strings.TrimSpace(hooks.AfterRun) == "" {
-		return
+		return nil
 	}
-	_ = runHook(ctx, path, hooks.AfterRun, issue, timeout)
+	return runHook(ctx, path, hooks.AfterRun, issue, timeout)
 }
 
 func runHook(parent context.Context, path, command string, issue tracker.Issue, timeout time.Duration) error {
