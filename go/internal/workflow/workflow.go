@@ -92,6 +92,9 @@ type ObservabilityConfig struct {
 	LogLevel string `yaml:"log_level"`
 }
 
+// ErrFrontMatterNotMap is returned when YAML front matter decodes to a non-object value.
+var ErrFrontMatterNotMap = errors.New("workflow front matter must decode to a map")
+
 func LoadFile(path string) (Definition, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -113,22 +116,42 @@ func Parse(content []byte) (Definition, error) {
 			break
 		}
 	}
+	var frontMatterLines [][]byte
+	promptLines := [][]byte{}
 	if end == -1 {
-		return Definition{}, errors.New("workflow front matter is missing closing delimiter")
+		frontMatterLines = lines[1:]
+	} else {
+		frontMatterLines = lines[1:end]
+		promptLines = lines[end+1:]
 	}
 
-	var cfg map[string]any
-	if err := yaml.Unmarshal(bytes.Join(lines[1:end], []byte("\n")), &cfg); err != nil {
+	cfg, err := parseFrontMatterMap(bytes.Join(frontMatterLines, []byte("\n")))
+	if err != nil {
 		return Definition{}, fmt.Errorf("parse workflow front matter: %w", err)
-	}
-	if cfg == nil {
-		cfg = map[string]any{}
 	}
 
 	return Definition{
 		Config:         cfg,
-		PromptTemplate: strings.TrimSpace(string(bytes.Join(lines[end+1:], []byte("\n")))),
+		PromptTemplate: strings.TrimSpace(string(bytes.Join(promptLines, []byte("\n")))),
 	}, nil
+}
+
+func parseFrontMatterMap(content []byte) (map[string]any, error) {
+	if len(bytes.TrimSpace(content)) == 0 {
+		return map[string]any{}, nil
+	}
+	var decoded any
+	if err := yaml.Unmarshal(content, &decoded); err != nil {
+		return nil, err
+	}
+	if decoded == nil {
+		return map[string]any{}, nil
+	}
+	cfg, ok := decoded.(map[string]any)
+	if !ok {
+		return nil, ErrFrontMatterNotMap
+	}
+	return cfg, nil
 }
 
 func ParseConfig(raw map[string]any) (Config, error) {

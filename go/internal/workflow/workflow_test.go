@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,6 +23,50 @@ Hello {{ .Issue.Identifier }}
 	}
 	if def.PromptTemplate != "Hello {{ .Issue.Identifier }}" {
 		t.Fatalf("unexpected prompt: %q", def.PromptTemplate)
+	}
+}
+
+func TestParseWorkflowPromptOnly(t *testing.T) {
+	def, err := Parse([]byte("Prompt only\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(def.Config) != 0 {
+		t.Fatalf("expected empty config: %#v", def.Config)
+	}
+	if def.PromptTemplate != "Prompt only" {
+		t.Fatalf("unexpected prompt: %q", def.PromptTemplate)
+	}
+}
+
+func TestParseWorkflowAcceptsUnterminatedFrontMatter(t *testing.T) {
+	def, err := Parse([]byte(`---
+tracker:
+  kind: github
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker, ok := def.Config["tracker"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tracker config map: %#v", def.Config["tracker"])
+	}
+	if tracker["kind"] != "github" {
+		t.Fatalf("unexpected tracker kind: %#v", tracker["kind"])
+	}
+	if def.PromptTemplate != "" {
+		t.Fatalf("unexpected prompt: %q", def.PromptTemplate)
+	}
+}
+
+func TestParseWorkflowRejectsNonMapFrontMatter(t *testing.T) {
+	_, err := Parse([]byte(`---
+- not-a-map
+---
+Prompt body
+`))
+	if !errors.Is(err, ErrFrontMatterNotMap) {
+		t.Fatalf("expected ErrFrontMatterNotMap, got %v", err)
 	}
 }
 
