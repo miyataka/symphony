@@ -20,6 +20,16 @@ func TestRenderPrompt(t *testing.T) {
 	}
 }
 
+func TestRenderPromptUsesStrictVariables(t *testing.T) {
+	_, err := renderPrompt("Issue {{ .Missing.TicketID }}", tracker.Issue{Identifier: "repo#1"}, 1)
+	if err == nil {
+		t.Fatal("expected missing variable error")
+	}
+	if !strings.Contains(err.Error(), `map has no entry for key "Missing"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestSortIssues(t *testing.T) {
 	low, high := 4, 1
 	old := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)

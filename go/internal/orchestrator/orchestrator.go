@@ -572,7 +572,7 @@ func renderPrompt(tmpl string, issue tracker.Issue, turn int) (string, error) {
 	if strings.TrimSpace(tmpl) == "" {
 		tmpl = "You are working on {{ .Issue.Identifier }}.\n\nTitle: {{ .Issue.Title }}\n\n{{ .Issue.Description }}"
 	}
-	parsed, err := template.New("workflow").Parse(tmpl)
+	parsed, err := template.New("workflow").Option("missingkey=error").Parse(tmpl)
 	if err != nil {
 		return "", err
 	}
