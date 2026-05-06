@@ -40,6 +40,26 @@ To print setup commands for a GitHub Project:
 go run ./cmd/symphony setup-github-project --workflow ./WORKFLOW.github.md
 ```
 
+## Logging
+
+Symphony writes `Info` and higher logs to stdout. The GitHub tracker logs one scan summary per
+Project read, including the configured owner/project, requested states, total Project items, matched
+issues, and counts/examples for skipped items such as non-Issue items, missing Status values, state
+mismatches, assignee mismatches, and repository mismatches.
+
+To keep a local log file:
+
+```bash
+go run ./cmd/symphony --workflow ./WORKFLOW.github.md 2>&1 | tee symphony.log
+```
+
+Use JSON logs by adding this to the workflow front matter:
+
+```yaml
+observability:
+  log_json: true
+```
+
 ## Configuration
 
 Use YAML front matter plus a Go `text/template` prompt body. The prompt receives:

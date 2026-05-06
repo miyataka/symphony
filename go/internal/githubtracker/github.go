@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -24,9 +25,14 @@ type Client struct {
 	token        string
 	cfg          workflow.TrackerConfig
 	http         *http.Client
+	logger       *slog.Logger
 }
 
 func New(cfg workflow.TrackerConfig) (*Client, error) {
+	return NewWithLogger(cfg, nil)
+}
+
+func NewWithLogger(cfg workflow.TrackerConfig, logger *slog.Logger) (*Client, error) {
 	if cfg.Token == "" {
 		return nil, errors.New("github token is required")
 	}
@@ -43,12 +49,16 @@ func New(cfg workflow.TrackerConfig) (*Client, error) {
 		cfg.OwnerType = "user"
 	}
 	cfg.AllowedRepositories = normalizeRepositoryList(cfg.AllowedRepositories)
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Client{
 		endpoint:     cfg.Endpoint,
 		restEndpoint: strings.TrimRight(cfg.RestEndpoint, "/"),
 		token:        cfg.Token,
 		cfg:          cfg,
 		http:         &http.Client{Timeout: 30 * time.Second},
+		logger:       logger,
 	}, nil
 }
 
@@ -131,6 +141,7 @@ func (c *Client) FetchIssuesByStates(ctx context.Context, states []string) ([]tr
 	stateSet := normalizedSet(states)
 	var out []tracker.Issue
 	var cursor *string
+	summary := newFetchSummary()
 
 	for {
 		page, err := c.fetchProjectItems(ctx, cursor)
@@ -138,17 +149,23 @@ func (c *Client) FetchIssuesByStates(ctx context.Context, states []string) ([]tr
 			return nil, err
 		}
 		for _, item := range page.Items {
-			issue, ok := c.normalizeItem(item)
+			summary.ProjectItems++
+			issue, reason, ok := c.normalizeItem(item)
 			if !ok {
+				summary.Skip(reason, projectItemLabel(item))
 				continue
 			}
+			summary.Issues++
 			if _, ok := stateSet[normalize(issue.State)]; !ok {
+				summary.Skip("state", fmt.Sprintf("%s status=%q", issue.Identifier, issue.State))
 				continue
 			}
 			if c.cfg.Assignee != "" && !item.Content.HasAssignee(c.cfg.Assignee) {
+				summary.Skip("assignee", issue.Identifier)
 				continue
 			}
 			if !c.repositoryAllowed(issue.RepositoryNameWithOwner) {
+				summary.Skip("repository", issue.Identifier)
 				continue
 			}
 			if c.cfg.ReadIssueDependencies {
@@ -165,6 +182,8 @@ func (c *Client) FetchIssuesByStates(ctx context.Context, states []string) ([]tr
 		}
 		cursor = page.EndCursor
 	}
+
+	c.logFetchSummary(states, summary, len(out))
 
 	sort.SliceStable(out, func(i, j int) bool {
 		left, right := out[i], out[j]
@@ -290,15 +309,79 @@ func (c *Client) fetchProjectItems(ctx context.Context, cursor *string) (project
 	return projectPage{Items: project.Items.Nodes}, nil
 }
 
-func (c *Client) normalizeItem(item projectItem) (tracker.Issue, bool) {
+type fetchSummary struct {
+	ProjectItems   int
+	Issues         int
+	Skipped        map[string]int
+	SkippedExample map[string][]string
+}
+
+func newFetchSummary() fetchSummary {
+	return fetchSummary{
+		Skipped:        map[string]int{},
+		SkippedExample: map[string][]string{},
+	}
+}
+
+func (s fetchSummary) Skip(reason, example string) {
+	if reason == "" {
+		reason = "unknown"
+	}
+	s.Skipped[reason]++
+	example = strings.TrimSpace(example)
+	if example == "" || len(s.SkippedExample[reason]) >= 5 {
+		return
+	}
+	s.SkippedExample[reason] = append(s.SkippedExample[reason], example)
+}
+
+func (c *Client) logFetchSummary(states []string, summary fetchSummary, matched int) {
+	if c.logger == nil {
+		return
+	}
+	c.logger.Info(
+		"github project scan completed",
+		"owner", c.cfg.Owner,
+		"owner_type", c.cfg.OwnerType,
+		"project_number", c.cfg.ProjectNumber,
+		"status_field", c.cfg.StatusField,
+		"states", states,
+		"allowed_repositories", c.cfg.AllowedRepositories,
+		"project_items", summary.ProjectItems,
+		"issue_items", summary.Issues,
+		"matched_issues", matched,
+		"skipped_non_issue", summary.Skipped["non_issue"],
+		"skipped_missing_status", summary.Skipped["missing_status"],
+		"skipped_state", summary.Skipped["state"],
+		"skipped_assignee", summary.Skipped["assignee"],
+		"skipped_repository", summary.Skipped["repository"],
+		"examples_non_issue", strings.Join(summary.SkippedExample["non_issue"], ", "),
+		"examples_missing_status", strings.Join(summary.SkippedExample["missing_status"], ", "),
+		"examples_state", strings.Join(summary.SkippedExample["state"], ", "),
+		"examples_assignee", strings.Join(summary.SkippedExample["assignee"], ", "),
+		"examples_repository", strings.Join(summary.SkippedExample["repository"], ", "),
+	)
+}
+
+func projectItemLabel(item projectItem) string {
+	if item.Content.ID != "" || item.Content.Repository.NameWithOwner != "" || item.Content.Number != 0 {
+		return item.Content.Identifier()
+	}
+	if item.Content.Typename != "" {
+		return item.Content.Typename + ":" + item.ID
+	}
+	return item.ID
+}
+
+func (c *Client) normalizeItem(item projectItem) (tracker.Issue, string, bool) {
 	if item.Content.Typename != "Issue" || item.Content.ID == "" {
-		return tracker.Issue{}, false
+		return tracker.Issue{}, "non_issue", false
 	}
 
 	fields := item.FieldValues.ByName()
 	state := fields[c.cfg.StatusField].String()
 	if state == "" {
-		return tracker.Issue{}, false
+		return tracker.Issue{}, "missing_status", false
 	}
 
 	var priority *int
@@ -333,7 +416,7 @@ func (c *Client) normalizeItem(item projectItem) (tracker.Issue, bool) {
 		PullRequests:            item.Content.PullRequests(),
 		CreatedAt:               createdAt,
 		UpdatedAt:               updatedAt,
-	}, true
+	}, "", true
 }
 
 func (c *Client) UpdateIssueState(ctx context.Context, issue tracker.Issue, stateName string) error {

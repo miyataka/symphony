@@ -42,15 +42,16 @@ func run(args []string) {
 	fs.StringVar(&workflowPath, "workflow", "WORKFLOW.md", "path to workflow markdown file")
 	fs.Parse(args)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := newLogger(false)
 
 	def, cfg, err := loadWorkflow(workflowPath)
 	if err != nil {
 		logger.Error("failed to load workflow", "path", workflowPath, "error", err)
 		os.Exit(1)
 	}
+	logger = newLogger(cfg.Observability.LogJSON)
 
-	tracker, err := githubtracker.New(cfg.Tracker)
+	tracker, err := githubtracker.NewWithLogger(cfg.Tracker, logger.With("component", "githubtracker"))
 	if err != nil {
 		logger.Error("failed to initialize tracker", "error", err)
 		os.Exit(1)
@@ -70,6 +71,14 @@ func run(args []string) {
 		logger.Error("symphony stopped with error", "error", err)
 		os.Exit(1)
 	}
+}
+
+func newLogger(logJSON bool) *slog.Logger {
+	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+	if logJSON {
+		return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+	}
+	return slog.New(slog.NewTextHandler(os.Stdout, opts))
 }
 
 func setupGitHubProject(args []string) {
