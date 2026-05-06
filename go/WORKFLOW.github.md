@@ -9,6 +9,11 @@ tracker:
   priority_field: Priority
   allowed_repositories:
     - miyataka/symphony
+    - robustengine/vmate-api
+    - robustengine/vmate-frontend
+    - robustengine/vmate-api-schema
+    - robustengine/vmate-infra
+    - robustengine/affiliate-service-provider
   start_state: In Progress
   handoff_state: Human Review
   rework_state: Rework

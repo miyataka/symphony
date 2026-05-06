@@ -103,6 +103,17 @@ func (s *Service) poll(ctx context.Context) error {
 		if s.applyReviewStatePolicy(ctx, issue) {
 			continue
 		}
+		if len(issue.BlockedBy) > 0 {
+			s.logger.Info(
+				"issue dispatch skipped",
+				"issue_id", issue.ID,
+				"issue_identifier", issue.Identifier,
+				"state", issue.State,
+				"reason", "blocked_by",
+				"blocked_by", blockerIdentifiers(issue.BlockedBy),
+			)
+			continue
+		}
 		if !s.canDispatch(issue) {
 			continue
 		}
@@ -539,6 +550,18 @@ func (s *Service) retryDelay(attempt int) time.Duration {
 		}
 	}
 	return delay
+}
+
+func blockerIdentifiers(blockers []tracker.Blocker) []string {
+	out := make([]string, 0, len(blockers))
+	for _, blocker := range blockers {
+		if blocker.Identifier != "" {
+			out = append(out, blocker.Identifier)
+			continue
+		}
+		out = append(out, blocker.ID)
+	}
+	return out
 }
 
 func renderPrompt(tmpl string, issue tracker.Issue, turn int) (string, error) {
