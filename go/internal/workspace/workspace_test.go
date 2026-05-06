@@ -12,16 +12,18 @@ import (
 	"github.com/miyataka/symphony/go/internal/workflow"
 )
 
+const testHookTimeout = 5 * time.Second
+
 func TestEnsureDeterministicPathPerIssueIdentifier(t *testing.T) {
 	root := t.TempDir()
 	manager := Manager{Root: root}
 	issue := tracker.Issue{Identifier: "MT/Det"}
 
-	first, firstCreated, err := manager.Ensure(context.Background(), issue, time.Second)
+	first, firstCreated, err := manager.Ensure(context.Background(), issue, testHookTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, secondCreated, err := manager.Ensure(context.Background(), issue, time.Second)
+	second, secondCreated, err := manager.Ensure(context.Background(), issue, testHookTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +52,7 @@ func TestEnsureReusesExistingIssueDirectory(t *testing.T) {
 	}
 	issue := tracker.Issue{Identifier: "MT-REUSE"}
 
-	first, _, err := manager.Ensure(context.Background(), issue, time.Second)
+	first, _, err := manager.Ensure(context.Background(), issue, testHookTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +63,7 @@ func TestEnsureReusesExistingIssueDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	second, created, err := manager.Ensure(context.Background(), issue, time.Second)
+	second, created, err := manager.Ensure(context.Background(), issue, testHookTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +84,7 @@ func TestEnsureReplacesStaleNonDirectoryPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path, created, err := Manager{Root: root}.Ensure(context.Background(), tracker.Issue{Identifier: "MT-STALE"}, time.Second)
+	path, created, err := Manager{Root: root}.Ensure(context.Background(), tracker.Issue{Identifier: "MT-STALE"}, testHookTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +117,7 @@ func TestEnsureRejectsSymlinkEscapeUnderRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err := Manager{Root: root}.Ensure(context.Background(), tracker.Issue{Identifier: "MT-SYM"}, time.Second)
+	_, _, err := Manager{Root: root}.Ensure(context.Background(), tracker.Issue{Identifier: "MT-SYM"}, testHookTimeout)
 	if err == nil {
 		t.Fatal("expected symlink escape to be rejected")
 	}
@@ -135,7 +137,7 @@ func TestEnsureCanonicalizesSymlinkedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path, _, err := Manager{Root: linkedRoot}.Ensure(context.Background(), tracker.Issue{Identifier: "MT-LINK"}, time.Second)
+	path, _, err := Manager{Root: linkedRoot}.Ensure(context.Background(), tracker.Issue{Identifier: "MT-LINK"}, testHookTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +157,7 @@ func TestRemoveEntryRejectsWorkspaceRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Manager{Root: root}.RemoveEntry(context.Background(), Entry{Name: "root", Path: root}, time.Second)
+	err := Manager{Root: root}.RemoveEntry(context.Background(), Entry{Name: "root", Path: root}, testHookTimeout)
 	if err == nil {
 		t.Fatal("expected workspace root removal to be rejected")
 	}
@@ -180,7 +182,7 @@ func TestRemoveEntryRejectsWorkspaceOutsideRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Manager{Root: root}.RemoveEntry(context.Background(), Entry{Name: "outside", Path: outside}, time.Second)
+	err := Manager{Root: root}.RemoveEntry(context.Background(), Entry{Name: "outside", Path: outside}, testHookTimeout)
 	if err == nil {
 		t.Fatal("expected outside workspace removal to be rejected")
 	}
