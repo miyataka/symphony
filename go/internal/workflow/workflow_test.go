@@ -64,6 +64,9 @@ func TestParseConfigResolvesEnvAndDefaults(t *testing.T) {
 	if cfg.PullRequest.MergeMethod != "SQUASH" || !cfg.PullRequest.RequireApproval || !cfg.PullRequest.RequirePassingChecks {
 		t.Fatalf("unexpected pull request defaults: %#v", cfg.PullRequest)
 	}
+	if cfg.Observability.LogLevel != "info" {
+		t.Fatalf("unexpected observability log level: %q", cfg.Observability.LogLevel)
+	}
 	if len(cfg.Tracker.AllowedRepositories) != 2 ||
 		cfg.Tracker.AllowedRepositories[0] != "miyataka/api" ||
 		cfg.Tracker.AllowedRepositories[1] != "miyataka/frontend" {
@@ -75,6 +78,45 @@ func TestParseConfigResolvesEnvAndDefaults(t *testing.T) {
 	}
 	if cfg.Workspace.Root != filepath.Join(home, "symphony-test") {
 		t.Fatalf("workspace root not expanded: %q", cfg.Workspace.Root)
+	}
+}
+
+func TestParseConfigResolvesObservabilityOptions(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"observability": map[string]any{
+			"log_json":  true,
+			"log_level": "DEBUG",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Observability.LogJSON {
+		t.Fatal("expected JSON logging to be enabled")
+	}
+	if cfg.Observability.LogLevel != "debug" {
+		t.Fatalf("unexpected log level: %q", cfg.Observability.LogLevel)
+	}
+}
+
+func TestParseConfigRejectsInvalidObservabilityLogLevel(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	_, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"observability": map[string]any{
+			"log_level": "trace",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error")
 	}
 }
 

@@ -4,7 +4,7 @@ tracker:
   token: $GITHUB_TOKEN
   owner: miyataka
   owner_type: user
-  project_number: 1
+  project_number: 2
   status_field: Status
   priority_field: Priority
   allowed_repositories:

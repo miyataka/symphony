@@ -88,7 +88,8 @@ type AgentConfig struct {
 }
 
 type ObservabilityConfig struct {
-	LogJSON bool `yaml:"log_json"`
+	LogJSON  bool   `yaml:"log_json"`
+	LogLevel string `yaml:"log_level"`
 }
 
 func LoadFile(path string) (Definition, error) {
@@ -255,6 +256,15 @@ func (c *Config) Resolve() error {
 	}
 	if c.Hooks.TimeoutMS <= 0 {
 		c.Hooks.TimeoutMS = int((60 * time.Second) / time.Millisecond)
+	}
+	c.Observability.LogLevel = strings.ToLower(strings.TrimSpace(c.Observability.LogLevel))
+	if c.Observability.LogLevel == "" {
+		c.Observability.LogLevel = "info"
+	}
+	switch c.Observability.LogLevel {
+	case "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("observability.log_level must be debug, info, warn, or error, got %q", c.Observability.LogLevel)
 	}
 
 	switch c.Tracker.Kind {
