@@ -185,7 +185,6 @@ func defaultConfig() Config {
 			ReworkState:           "Rework",
 			MergingState:          "Merging",
 			DoneState:             "Done",
-			WorkpadMarker:         "## Codex Workpad",
 			ReadIssueDependencies: true,
 			ActiveStates:          []string{"Todo", "In Progress", "Rework"},
 			MonitorStates:         []string{"Human Review", "Merging"},
@@ -253,8 +252,13 @@ func (c *Config) Resolve() error {
 	if c.Tracker.DoneState == "" {
 		c.Tracker.DoneState = "Done"
 	}
-	if c.Tracker.WorkpadMarker == "" {
-		c.Tracker.WorkpadMarker = "## Codex Workpad"
+	if strings.TrimSpace(c.Tracker.WorkpadMarker) == "" {
+		switch c.Agent.Kind {
+		case "claude-code":
+			c.Tracker.WorkpadMarker = "## Claude Workpad"
+		default:
+			c.Tracker.WorkpadMarker = "## Codex Workpad"
+		}
 	}
 	if len(c.Tracker.MonitorStates) == 0 && c.Tracker.HandoffState != "" {
 		c.Tracker.MonitorStates = []string{c.Tracker.HandoffState, c.Tracker.MergingState}
