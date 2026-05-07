@@ -173,7 +173,7 @@ func (s *Service) moveIssueWithWorkpad(ctx context.Context, issue tracker.Issue,
 	}
 	s.logStateTransition(issue, issue.State, state, note)
 	issue.State = state
-	s.upsertWorkpad(ctx, issue, workpadBody(issue, state, "", note))
+	s.upsertWorkpad(ctx, issue, s.workpadBody(issue, state, "", note))
 }
 
 func (s *Service) canDispatch(issue tracker.Issue) bool {
@@ -263,7 +263,7 @@ func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) error {
 	if err != nil {
 		return err
 	}
-	s.upsertWorkpad(ctx, issue, workpadBody(issue, "Running", path, "Workspace prepared and agent execution started."))
+	s.upsertWorkpad(ctx, issue, s.workpadBody(issue, "Running", path, "Workspace prepared and agent execution started."))
 
 	for turn := 1; turn <= s.cfg.Agent.MaxTurns; turn++ {
 		if err := workspace.RunBefore(ctx, path, s.cfg.Hooks, issue, s.cfg.HookTimeout()); err != nil {
@@ -278,7 +278,7 @@ func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) error {
 		if err := workspace.RunAfter(ctx, path, s.cfg.Hooks, issue, s.cfg.HookTimeout()); err != nil {
 			return fmt.Errorf("after_run hook: %w", err)
 		}
-		s.upsertWorkpad(ctx, issue, workpadBody(issue, "Running", path, fmt.Sprintf("Completed turn %d.", turn)))
+		s.upsertWorkpad(ctx, issue, s.workpadBody(issue, "Running", path, fmt.Sprintf("Completed turn %d.", turn)))
 
 		refreshed, active, err := s.refreshIssue(ctx, issue.ID)
 		if err != nil {
@@ -312,7 +312,7 @@ func (s *Service) handleSuccessfulRun(ctx context.Context, issue tracker.Issue) 
 		s.logStateTransition(refreshed, refreshed.State, s.cfg.Tracker.HandoffState, "agent_run_completed")
 		refreshed.State = s.cfg.Tracker.HandoffState
 	}
-	s.upsertWorkpad(ctx, refreshed, workpadBody(refreshed, "Human Review", "", "Agent run completed and issue is ready for review."))
+	s.upsertWorkpad(ctx, refreshed, s.workpadBody(refreshed, "Human Review", "", "Agent run completed and issue is ready for review."))
 }
 
 func (s *Service) runAgentTurn(parent context.Context, path string, issue tracker.Issue, turn int) error {
@@ -557,11 +557,11 @@ func (s *Service) mergePullRequest(ctx context.Context, issue tracker.Issue, pr 
 	}
 	if err := merger.MergePullRequest(ctx, issue, pr, opts); err != nil {
 		s.logger.Warn("failed to merge pull request", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "pr_number", pr.Number, "error", err)
-		s.upsertWorkpad(ctx, issue, workpadBody(issue, issue.State, "", "Linked PR is ready, but automatic merge failed: "+err.Error()))
+		s.upsertWorkpad(ctx, issue, s.workpadBody(issue, issue.State, "", "Linked PR is ready, but automatic merge failed: "+err.Error()))
 		return
 	}
 	s.logger.Info("pull request merge submitted", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "pr_number", pr.Number, "method", opts.Method)
-	s.upsertWorkpad(ctx, issue, workpadBody(issue, issue.State, "", "Linked PR is ready and automatic merge was submitted."))
+	s.upsertWorkpad(ctx, issue, s.workpadBody(issue, issue.State, "", "Linked PR is ready and automatic merge was submitted."))
 }
 
 func (s *Service) logStateTransition(issue tracker.Issue, from, to, reason string) {
@@ -717,9 +717,13 @@ func (s *Service) pullRequestReadyForMerge(pr tracker.PullRequest) bool {
 	return true
 }
 
-func workpadBody(issue tracker.Issue, status, workspacePath, note string) string {
+func (s *Service) workpadBody(issue tracker.Issue, status, workspacePath, note string) string {
+	marker := strings.TrimSpace(s.cfg.Tracker.WorkpadMarker)
+	if marker == "" {
+		marker = "## Codex Workpad"
+	}
 	lines := []string{
-		"## Codex Workpad",
+		marker,
 		"",
 		"### Status",
 		"",
