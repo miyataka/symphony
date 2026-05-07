@@ -62,8 +62,10 @@ hooks:
     git fetch origin --prune
   after_run: |
     set -eu
+    git rm -f --ignore-unmatch .symphony/prompt.md >/dev/null 2>&1 || true
     changes="$(git status --porcelain -- . ':(exclude).symphony' ':(exclude).tmp')"
-    if [ -z "$changes" ]; then
+    prompt_cleanup="$(git diff --cached --name-only -- .symphony/prompt.md)"
+    if [ -z "$changes$prompt_cleanup" ]; then
       echo "no non-Symphony workspace changes to commit" >&2
       exit 1
     fi
@@ -96,6 +98,8 @@ Description:
 Instructions:
 
 1. Work only inside the current workspace.
-2. Keep issue and PR status current using the GitHub tools available in the workspace.
-3. Run validation before handoff.
-4. Final output must report completed actions and blockers only.
+2. Do not edit, stage, or commit `.symphony/` or `.tmp/`; they are Symphony runtime files.
+3. Do not run `git commit`, `git push`, `gh pr create`, or `gh pr edit`; Symphony hooks publish the branch and PR after the turn.
+4. Read GitHub context when available, but leave issue status and PR creation to Symphony unless explicitly asked by the prompt.
+5. Run validation before handoff.
+6. Final output must report completed actions and blockers only.

@@ -14,7 +14,7 @@ tracker.
 2. Polls a GitHub Projects v2 board for issues in configured active states
 3. Creates a deterministic workspace per issue
 4. Runs workspace lifecycle hooks
-5. Writes the rendered prompt to `.symphony/prompt.md`
+5. Writes the rendered prompt to a temporary file for `agent.command`
 6. Runs `agent.command` inside the workspace with issue metadata in environment variables
 7. Reconciles running work against GitHub Project status and retries failed runs with backoff
 8. Updates GitHub Project status and a persistent `## Codex Workpad` issue comment when possible
@@ -116,8 +116,10 @@ hooks:
   before_run: |
     git fetch origin --prune
   after_run: |
+    git rm -f --ignore-unmatch .symphony/prompt.md >/dev/null 2>&1 || true
     changes="$(git status --porcelain -- . ':(exclude).symphony' ':(exclude).tmp')"
-    if [ -z "$changes" ]; then
+    prompt_cleanup="$(git diff --cached --name-only -- .symphony/prompt.md)"
+    if [ -z "$changes$prompt_cleanup" ]; then
       echo "no non-Symphony workspace changes to commit" >&2
       exit 1
     fi
@@ -143,6 +145,13 @@ URL: {{ .Issue.URL }}
 Repository: {{ .Issue.RepositoryNameWithOwner }}
 
 {{ .Issue.Description }}
+
+Instructions:
+
+1. Work only inside the current workspace.
+2. Do not edit, stage, or commit `.symphony/` or `.tmp/`; they are Symphony runtime files.
+3. Do not run `git commit`, `git push`, `gh pr create`, or `gh pr edit`; Symphony hooks publish the branch and PR after the turn.
+4. Run validation before handoff.
 ```
 
 ## Environment variables exposed to hooks and agent.command
@@ -156,7 +165,7 @@ Repository: {{ .Issue.RepositoryNameWithOwner }}
 - `SYMPHONY_REPOSITORY`
 - `SYMPHONY_REPOSITORY_SSH_URL`
 - `SYMPHONY_REPOSITORY_HTML_URL`
-- `SYMPHONY_PROMPT_FILE` for `agent.command`
+- `SYMPHONY_PROMPT_FILE` for `agent.command`; when `agent.command` is configured this prompt file is outside the workspace and removed after the command exits
 - `SYMPHONY_TURN` for `agent.command`
 
 ## GitHub writeback
