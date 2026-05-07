@@ -359,6 +359,35 @@ func TestCanDispatchPrefersMonitorStateOverActiveState(t *testing.T) {
 	}
 }
 
+func TestDispatchRetryRefreshesIssueStateBeforeDispatch(t *testing.T) {
+	recorder := &recordingTracker{
+		issueStatesByID: []tracker.Issue{{
+			ID:         "I_1",
+			Identifier: "repo#1",
+			Title:      "Issue",
+			State:      "Human Review",
+		}},
+	}
+	service := New(Options{
+		Config:  testConfig(),
+		Tracker: recorder,
+	})
+
+	service.dispatchRetry(context.Background(), tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "Rework",
+	}, 1)
+
+	if len(recorder.fetchIssueStateIDs) != 1 {
+		t.Fatalf("expected retry to refresh issue state, got %d calls", len(recorder.fetchIssueStateIDs))
+	}
+	if _, ok := service.running["I_1"]; ok {
+		t.Fatal("expected inactive refreshed issue not to dispatch")
+	}
+}
+
 func TestRunIssuePropagatesAfterRunHookFailure(t *testing.T) {
 	cfg := testConfig()
 	cfg.Workspace.Root = t.TempDir()
@@ -398,10 +427,12 @@ func testConfig() workflow.Config {
 }
 
 type recordingTracker struct {
-	updatedState string
-	workpad      string
-	mergedPRID   string
-	mergeMethod  string
+	updatedState       string
+	workpad            string
+	mergedPRID         string
+	mergeMethod        string
+	issueStatesByID    []tracker.Issue
+	fetchIssueStateIDs [][]string
 }
 
 func (r *recordingTracker) FetchCandidateIssues(context.Context) ([]tracker.Issue, error) {
@@ -412,8 +443,9 @@ func (r *recordingTracker) FetchIssuesByStates(context.Context, []string) ([]tra
 	return nil, nil
 }
 
-func (r *recordingTracker) FetchIssueStatesByIDs(context.Context, []string) ([]tracker.Issue, error) {
-	return nil, nil
+func (r *recordingTracker) FetchIssueStatesByIDs(_ context.Context, ids []string) ([]tracker.Issue, error) {
+	r.fetchIssueStateIDs = append(r.fetchIssueStateIDs, append([]string(nil), ids...))
+	return r.issueStatesByID, nil
 }
 
 func (r *recordingTracker) UpdateIssueState(_ context.Context, _ tracker.Issue, state string) error {

@@ -235,11 +235,27 @@ func (s *Service) dispatch(parent context.Context, issue tracker.Issue, retryCou
 		delay := s.retryDelay(retryCount + 1)
 		s.logger.Warn("issue run failed; scheduling retry", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "delay", delay.String(), "error", err)
 		time.AfterFunc(delay, func() {
-			if parent.Err() == nil && s.canDispatch(issue) {
-				s.dispatch(parent, issue, retryCount+1)
-			}
+			s.dispatchRetry(parent, issue, retryCount+1)
 		})
 	}()
+}
+
+func (s *Service) dispatchRetry(parent context.Context, issue tracker.Issue, retryCount int) {
+	if parent.Err() != nil {
+		return
+	}
+	refreshed, active, err := s.refreshIssue(parent, issue.ID)
+	if err != nil {
+		s.logger.Warn("failed to refresh issue before retry", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
+		return
+	}
+	if !active {
+		s.logger.Info("skipping retry for inactive issue", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "state", refreshed.State)
+		return
+	}
+	if s.canDispatch(refreshed) {
+		s.dispatch(parent, refreshed, retryCount)
+	}
 }
 
 func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) error {
