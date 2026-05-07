@@ -336,3 +336,59 @@ func TestParseConfigPreservesExplicitWorkpadMarker(t *testing.T) {
 		t.Fatalf("expected user-provided marker preserved, got %q", cfg.Tracker.WorkpadMarker)
 	}
 }
+
+func TestParseConfigDefaultsClaudeCodeCommand(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"agent": map[string]any{
+			"kind": "claude-code",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := `cat "$SYMPHONY_PROMPT_FILE" | claude -p --dangerously-skip-permissions`
+	if cfg.Agent.Command != expected {
+		t.Fatalf("expected default claude-code command\n  want: %q\n  got:  %q", expected, cfg.Agent.Command)
+	}
+}
+
+func TestParseConfigPreservesExplicitClaudeCodeCommand(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"agent": map[string]any{
+			"kind":    "claude-code",
+			"command": "claude --print < $SYMPHONY_PROMPT_FILE",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Command != "claude --print < $SYMPHONY_PROMPT_FILE" {
+		t.Fatalf("user command not preserved, got %q", cfg.Agent.Command)
+	}
+}
+
+func TestParseConfigCodexLeavesCommandEmpty(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Command != "" {
+		t.Fatalf("expected codex default to leave command empty, got %q", cfg.Agent.Command)
+	}
+}
