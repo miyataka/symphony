@@ -412,6 +412,34 @@ func TestRunIssuePropagatesAfterRunHookFailure(t *testing.T) {
 	}
 }
 
+func TestApplyReviewStatePolicyUsesConfiguredWorkpadMarker(t *testing.T) {
+	cfg := testConfig()
+	cfg.Tracker.WorkpadMarker = "## Claude Workpad"
+	recorder := &recordingTracker{}
+	service := New(Options{
+		Config:  cfg,
+		Tracker: recorder,
+	})
+	handled := service.applyReviewStatePolicy(context.Background(), tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "Human Review",
+		PullRequests: []tracker.PullRequest{{
+			ReviewDecision: "CHANGES_REQUESTED",
+		}},
+	})
+	if !handled {
+		t.Fatal("expected policy to handle issue")
+	}
+	if recorder.workpad == "" {
+		t.Fatal("expected workpad update")
+	}
+	if !strings.HasPrefix(recorder.workpad, "## Claude Workpad") {
+		t.Fatalf("expected workpad body to start with configured marker, got: %q", recorder.workpad)
+	}
+}
+
 func testConfig() workflow.Config {
 	cfg, err := workflow.ParseConfig(map[string]any{
 		"tracker": map[string]any{

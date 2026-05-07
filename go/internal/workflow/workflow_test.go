@@ -227,3 +227,168 @@ func TestParseConfigRejectsMissingProject(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestParseConfigAcceptsClaudeCodeKind(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"agent": map[string]any{
+			"kind": " Claude-Code ",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Kind != "claude-code" {
+		t.Fatalf("expected normalized kind \"claude-code\", got %q", cfg.Agent.Kind)
+	}
+}
+
+func TestParseConfigDefaultsKindToCodex(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Kind != "codex" {
+		t.Fatalf("expected default kind \"codex\", got %q", cfg.Agent.Kind)
+	}
+}
+
+func TestParseConfigRejectsUnknownAgentKind(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	_, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"agent": map[string]any{
+			"kind": "gemini",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown agent kind")
+	}
+	if !strings.Contains(err.Error(), "agent.kind") {
+		t.Fatalf("expected error to mention agent.kind, got %v", err)
+	}
+}
+
+func TestParseConfigDefaultsClaudeCodeWorkpadMarker(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"agent": map[string]any{
+			"kind": "claude-code",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tracker.WorkpadMarker != "## Claude Workpad" {
+		t.Fatalf("expected default marker \"## Claude Workpad\", got %q", cfg.Tracker.WorkpadMarker)
+	}
+}
+
+func TestParseConfigDefaultsCodexWorkpadMarker(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tracker.WorkpadMarker != "## Codex Workpad" {
+		t.Fatalf("expected default marker \"## Codex Workpad\", got %q", cfg.Tracker.WorkpadMarker)
+	}
+}
+
+func TestParseConfigPreservesExplicitWorkpadMarker(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+			"workpad_marker": "## Custom Workpad",
+		},
+		"agent": map[string]any{
+			"kind": "claude-code",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tracker.WorkpadMarker != "## Custom Workpad" {
+		t.Fatalf("expected user-provided marker preserved, got %q", cfg.Tracker.WorkpadMarker)
+	}
+}
+
+func TestParseConfigDefaultsClaudeCodeCommand(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"agent": map[string]any{
+			"kind": "claude-code",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := `cat "$SYMPHONY_PROMPT_FILE" | claude -p --dangerously-skip-permissions`
+	if cfg.Agent.Command != expected {
+		t.Fatalf("expected default claude-code command\n  want: %q\n  got:  %q", expected, cfg.Agent.Command)
+	}
+}
+
+func TestParseConfigPreservesExplicitClaudeCodeCommand(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"agent": map[string]any{
+			"kind":    "claude-code",
+			"command": "claude --print < $SYMPHONY_PROMPT_FILE",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Command != "claude --print < $SYMPHONY_PROMPT_FILE" {
+		t.Fatalf("user command not preserved, got %q", cfg.Agent.Command)
+	}
+}
+
+func TestParseConfigCodexLeavesCommandEmpty(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Command != "" {
+		t.Fatalf("expected codex default to leave command empty, got %q", cfg.Agent.Command)
+	}
+}

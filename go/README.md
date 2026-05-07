@@ -61,6 +61,28 @@ observability:
   log_level: debug
 ```
 
+## Agent kinds
+
+Symphony selects per-agent defaults from `agent.kind` in the workflow front matter:
+
+| `agent.kind`         | Default `agent.command`                                                  | Default `tracker.workpad_marker` |
+|----------------------|--------------------------------------------------------------------------|----------------------------------|
+| `codex` (or omitted) | (none — must be set explicitly)                                          | `## Codex Workpad`               |
+| `claude-code`        | `cat "$SYMPHONY_PROMPT_FILE" \| claude -p --dangerously-skip-permissions` | `## Claude Workpad`              |
+
+Both `agent.command` and `tracker.workpad_marker` can be overridden per workflow. `agent.kind` is normalized to lower case and an unknown value is rejected at workflow load time.
+
+`claude-code` requires the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and on `PATH`. The default command runs Claude Code with `--dangerously-skip-permissions` because Symphony already isolates each issue inside a per-issue workspace; if you need stricter sandboxing, set `agent.command` explicitly.
+
+Minimal `claude-code` example:
+
+```yaml
+agent:
+  kind: claude-code
+  max_concurrent_agents: 4
+  max_turns: 20
+```
+
 ## Configuration
 
 Use YAML front matter plus a Go `text/template` prompt body. The prompt receives:

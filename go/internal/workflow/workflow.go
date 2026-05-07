@@ -79,6 +79,7 @@ type HooksConfig struct {
 }
 
 type AgentConfig struct {
+	Kind                       string         `yaml:"kind"`
 	Command                    string         `yaml:"command"`
 	MaxConcurrentAgents        int            `yaml:"max_concurrent_agents"`
 	MaxConcurrentAgentsByState map[string]int `yaml:"max_concurrent_agents_by_state"`
@@ -184,7 +185,6 @@ func defaultConfig() Config {
 			ReworkState:           "Rework",
 			MergingState:          "Merging",
 			DoneState:             "Done",
-			WorkpadMarker:         "## Codex Workpad",
 			ReadIssueDependencies: true,
 			ActiveStates:          []string{"Todo", "In Progress", "Rework"},
 			MonitorStates:         []string{"Human Review", "Merging"},
@@ -216,6 +216,18 @@ func (c *Config) Resolve() error {
 	c.Tracker.Kind = strings.ToLower(strings.TrimSpace(c.Tracker.Kind))
 	c.Tracker.OwnerType = strings.ToLower(strings.TrimSpace(c.Tracker.OwnerType))
 	c.Tracker.AllowedRepositories = normalizeList(c.Tracker.AllowedRepositories)
+	c.Agent.Kind = strings.ToLower(strings.TrimSpace(c.Agent.Kind))
+	if c.Agent.Kind == "" {
+		c.Agent.Kind = "codex"
+	}
+	switch c.Agent.Kind {
+	case "codex", "claude-code":
+	default:
+		return fmt.Errorf("agent.kind must be \"codex\" or \"claude-code\", got %q", c.Agent.Kind)
+	}
+	if strings.TrimSpace(c.Agent.Command) == "" && c.Agent.Kind == "claude-code" {
+		c.Agent.Command = `cat "$SYMPHONY_PROMPT_FILE" | claude -p --dangerously-skip-permissions`
+	}
 	if c.Tracker.OwnerType == "" {
 		c.Tracker.OwnerType = "user"
 	}
@@ -243,8 +255,13 @@ func (c *Config) Resolve() error {
 	if c.Tracker.DoneState == "" {
 		c.Tracker.DoneState = "Done"
 	}
-	if c.Tracker.WorkpadMarker == "" {
-		c.Tracker.WorkpadMarker = "## Codex Workpad"
+	if strings.TrimSpace(c.Tracker.WorkpadMarker) == "" {
+		switch c.Agent.Kind {
+		case "claude-code":
+			c.Tracker.WorkpadMarker = "## Claude Workpad"
+		default:
+			c.Tracker.WorkpadMarker = "## Codex Workpad"
+		}
 	}
 	if len(c.Tracker.MonitorStates) == 0 && c.Tracker.HandoffState != "" {
 		c.Tracker.MonitorStates = []string{c.Tracker.HandoffState, c.Tracker.MergingState}
