@@ -304,19 +304,21 @@ func (s *Service) runAgentTurn(parent context.Context, path string, issue tracke
 	if err != nil {
 		return err
 	}
-	stateDir := filepath.Join(path, ".symphony")
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
-		return err
-	}
-	promptPath := filepath.Join(stateDir, "prompt.md")
-	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
-		return err
-	}
 
 	if strings.TrimSpace(s.cfg.Agent.Command) == "" {
+		promptPath, err := writeWorkspacePrompt(path, prompt)
+		if err != nil {
+			return err
+		}
 		s.logger.Info("agent.command is empty; wrote prompt only", "issue_identifier", issue.Identifier, "prompt", promptPath)
 		return nil
 	}
+
+	promptPath, cleanupPrompt, err := writeCommandPrompt(prompt)
+	if err != nil {
+		return err
+	}
+	defer cleanupPrompt()
 
 	ctx, cancel := context.WithTimeout(parent, s.cfg.TurnTimeout())
 	defer cancel()
@@ -334,6 +336,34 @@ func (s *Service) runAgentTurn(parent context.Context, path string, issue tracke
 		return fmt.Errorf("agent command: %w", err)
 	}
 	return nil
+}
+
+func writeWorkspacePrompt(path, prompt string) (string, error) {
+	stateDir := filepath.Join(path, ".symphony")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		return "", err
+	}
+	promptPath := filepath.Join(stateDir, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
+		return "", err
+	}
+	return promptPath, nil
+}
+
+func writeCommandPrompt(prompt string) (string, func(), error) {
+	stateDir, err := os.MkdirTemp("", "symphony-agent-prompt-*")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() {
+		_ = os.RemoveAll(stateDir)
+	}
+	promptPath := filepath.Join(stateDir, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte(prompt), 0o600); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return promptPath, cleanup, nil
 }
 
 func (s *Service) refreshIssue(ctx context.Context, id string) (tracker.Issue, bool, error) {

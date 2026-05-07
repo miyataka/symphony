@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +44,50 @@ func TestSortIssues(t *testing.T) {
 	sortIssues(issues)
 	if issues[0].Identifier != "repo#1" || issues[1].Identifier != "repo#2" || issues[2].Identifier != "repo#3" {
 		t.Fatalf("unexpected order: %#v", issues)
+	}
+}
+
+func TestRunAgentTurnUsesTempPromptOutsideWorkspace(t *testing.T) {
+	cfg := testConfig()
+	cfg.Agent.Command = `printf '%s' "$SYMPHONY_PROMPT_FILE" > prompt_path.txt; cat "$SYMPHONY_PROMPT_FILE" > prompt_stdin.txt`
+	service := New(Options{
+		Config:         cfg,
+		PromptTemplate: "Issue {{ .Issue.Identifier }} turn {{ .Turn }}",
+		Tracker:        &recordingTracker{},
+	})
+	workspace := t.TempDir()
+
+	err := service.runAgentTurn(context.Background(), workspace, tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "In Progress",
+	}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stdin, err := os.ReadFile(filepath.Join(workspace, "prompt_stdin.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stdin) != "Issue repo#1 turn 2\n" {
+		t.Fatalf("unexpected prompt stdin: %q", stdin)
+	}
+	promptPathBytes, err := os.ReadFile(filepath.Join(workspace, "prompt_path.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptPath := string(promptPathBytes)
+	rel, err := filepath.Rel(workspace, promptPath)
+	if err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+		t.Fatalf("prompt path should be outside workspace: %q", promptPath)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".symphony", "prompt.md")); !os.IsNotExist(err) {
+		t.Fatalf("workspace prompt should not be written for agent.command runs: %v", err)
+	}
+	if _, err := os.Stat(promptPath); !os.IsNotExist(err) {
+		t.Fatalf("temporary prompt should be cleaned up after agent.command: %v", err)
 	}
 }
 

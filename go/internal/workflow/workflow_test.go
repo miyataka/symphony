@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +37,23 @@ func TestParseWorkflowPromptOnly(t *testing.T) {
 	}
 	if def.PromptTemplate != "Prompt only" {
 		t.Fatalf("unexpected prompt: %q", def.PromptTemplate)
+	}
+}
+
+func TestGitHubWorkflowKeepsRuntimeFilesOutOfAgentCommits(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "WORKFLOW.github.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(body)
+	if !strings.Contains(workflow, "git rm -f --ignore-unmatch .symphony/prompt.md") {
+		t.Fatal("expected GitHub workflow to clean tracked runtime prompts")
+	}
+	if !strings.Contains(workflow, "Do not edit, stage, or commit `.symphony/` or `.tmp/`") {
+		t.Fatal("expected GitHub workflow to instruct agents away from runtime files")
+	}
+	if !strings.Contains(workflow, "Do not run `git commit`, `git push`, `gh pr create`, or `gh pr edit`") {
+		t.Fatal("expected GitHub workflow to reserve publishing for hooks")
 	}
 }
 

@@ -5,11 +5,15 @@ if [ -z "${SYMPHONY_REPOSITORY:-}" ]; then
   exit 1
 fi
 
-if [ -z "$(git status --porcelain)" ]; then
+git rm -f --ignore-unmatch .symphony/prompt.md >/dev/null 2>&1 || true
+
+changes="$(git status --porcelain -- . ':(exclude).symphony' ':(exclude).tmp')"
+prompt_cleanup="$(git diff --cached --name-only -- .symphony/prompt.md)"
+if [ -z "$changes$prompt_cleanup" ]; then
   exit 0
 fi
 
-git add -A
+git add -A -- . ':(exclude).symphony' ':(exclude).tmp'
 git commit -m "${SYMPHONY_ISSUE_IDENTIFIER}: agent update"
 git push -u origin "$SYMPHONY_BRANCH"
 
