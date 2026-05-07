@@ -227,3 +227,57 @@ func TestParseConfigRejectsMissingProject(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestParseConfigAcceptsClaudeCodeKind(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"agent": map[string]any{
+			"kind": " Claude-Code ",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Kind != "claude-code" {
+		t.Fatalf("expected normalized kind \"claude-code\", got %q", cfg.Agent.Kind)
+	}
+}
+
+func TestParseConfigDefaultsKindToCodex(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Kind != "codex" {
+		t.Fatalf("expected default kind \"codex\", got %q", cfg.Agent.Kind)
+	}
+}
+
+func TestParseConfigRejectsUnknownAgentKind(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	_, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"agent": map[string]any{
+			"kind": "gemini",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown agent kind")
+	}
+	if !strings.Contains(err.Error(), "agent.kind") {
+		t.Fatalf("expected error to mention agent.kind, got %v", err)
+	}
+}

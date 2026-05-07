@@ -79,6 +79,7 @@ type HooksConfig struct {
 }
 
 type AgentConfig struct {
+	Kind                       string         `yaml:"kind"`
 	Command                    string         `yaml:"command"`
 	MaxConcurrentAgents        int            `yaml:"max_concurrent_agents"`
 	MaxConcurrentAgentsByState map[string]int `yaml:"max_concurrent_agents_by_state"`
@@ -216,6 +217,15 @@ func (c *Config) Resolve() error {
 	c.Tracker.Kind = strings.ToLower(strings.TrimSpace(c.Tracker.Kind))
 	c.Tracker.OwnerType = strings.ToLower(strings.TrimSpace(c.Tracker.OwnerType))
 	c.Tracker.AllowedRepositories = normalizeList(c.Tracker.AllowedRepositories)
+	c.Agent.Kind = strings.ToLower(strings.TrimSpace(c.Agent.Kind))
+	if c.Agent.Kind == "" {
+		c.Agent.Kind = "codex"
+	}
+	switch c.Agent.Kind {
+	case "codex", "claude-code":
+	default:
+		return fmt.Errorf("agent.kind must be \"codex\" or \"claude-code\", got %q", c.Agent.Kind)
+	}
 	if c.Tracker.OwnerType == "" {
 		c.Tracker.OwnerType = "user"
 	}
