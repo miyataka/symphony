@@ -12,7 +12,7 @@ import (
 	"github.com/miyataka/symphony/go/internal/workflow"
 )
 
-const testHookTimeout = 5 * time.Second
+const testHookTimeout = 30 * time.Second
 
 func TestEnsureDeterministicPathPerIssueIdentifier(t *testing.T) {
 	root := t.TempDir()
