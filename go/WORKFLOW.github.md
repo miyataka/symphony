@@ -102,6 +102,13 @@ Description:
 {{ end }}
 {{ end }}
 
+{{ if .Issue.PRReviewComments }}Unresolved PR review comments:
+{{ range .Issue.PRReviewComments }}
+- {{ .Author }}{{ if .AuthorIsBot }} (bot){{ end }} on PR #{{ .PRNumber }} {{ .Path }}{{ if .Line }}:{{ .Line }}{{ end }} {{ .URL }}
+{{ .Body }}
+{{ end }}
+{{ end }}
+
 Instructions:
 
 1. Work only inside the current workspace.

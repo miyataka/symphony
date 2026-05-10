@@ -317,6 +317,263 @@ func TestFetchIssuesByStatesNormalizesIssueComments(t *testing.T) {
 	}
 }
 
+func TestFetchIssuesByStatesNormalizesUnresolvedPRReviewComments(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data": {
+				"user": {
+					"projectV2": {
+						"items": {
+							"nodes": [{
+								"id": "PVTI_1",
+								"content": {
+									"__typename": "Issue",
+									"id": "I_1",
+									"number": 42,
+									"title": "Implement thing",
+									"body": "Body text",
+									"url": "https://github.com/miyataka/symphony/issues/42",
+									"state": "OPEN",
+									"repository": {
+										"nameWithOwner": "miyataka/symphony",
+										"url": "https://github.com/miyataka/symphony"
+									},
+									"labels": {"nodes": []},
+									"assignees": {"nodes": []},
+									"comments": {"nodes": []},
+									"closedByPullRequestsReferences": {
+										"nodes": [{
+											"id": "PR_1",
+											"number": 17,
+											"title": "Fix issue",
+											"url": "https://github.com/miyataka/symphony/pull/17",
+											"state": "OPEN",
+											"isDraft": false,
+											"reviewDecision": "CHANGES_REQUESTED",
+											"mergeStateStatus": "UNSTABLE",
+											"comments": {"totalCount": 0},
+											"commits": {
+												"nodes": [{"commit": {"committedDate": "2026-05-01T00:00:00Z"}}]
+											},
+											"reviewThreads": {
+												"totalCount": 2,
+												"nodes": [
+													{
+														"isResolved": true,
+														"path": "go/main.go",
+														"line": 10,
+														"comments": {
+															"nodes": [{
+																"id": "RC_RESOLVED",
+																"body": "old resolved feedback",
+																"url": "https://github.com/miyataka/symphony/pull/17#discussion_r1",
+																"createdAt": "2026-05-01T00:01:00Z",
+																"author": {"__typename": "User", "login": "reviewer"}
+															}]
+														}
+													},
+													{
+														"isResolved": false,
+														"path": "go/orchestrator.go",
+														"line": 42,
+														"comments": {
+															"nodes": [{
+																"id": "RC_OPEN",
+																"body": "needs an early return when the issue is missing",
+																"url": "https://github.com/miyataka/symphony/pull/17#discussion_r2",
+																"createdAt": "2026-05-01T01:00:00Z",
+																"author": {"__typename": "User", "login": "reviewer"}
+															}]
+														}
+													}
+												]
+											}
+										}]
+									}
+								},
+								"fieldValues": {
+									"nodes": [{"__typename": "ProjectV2ItemFieldSingleSelectValue", "name": "Rework", "field": {"name": "Status"}}]
+								}
+							}],
+							"pageInfo": {"hasNextPage": false, "endCursor": null}
+						}
+					}
+				}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := New(workflow.TrackerConfig{
+		Token:          "token",
+		Endpoint:       server.URL,
+		Owner:          "miyataka",
+		OwnerType:      "user",
+		ProjectNumber:  1,
+		StatusField:    "Status",
+		WorkpadMarker:  "## Claude Workpad",
+		ActiveStates:   []string{"Rework"},
+		TerminalStates: []string{"Done"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues, err := client.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected one issue, got %d", len(issues))
+	}
+	reviews := issues[0].PRReviewComments
+	if len(reviews) != 1 {
+		t.Fatalf("expected one unresolved review comment, got %#v", reviews)
+	}
+	got := reviews[0]
+	if got.ID != "RC_OPEN" {
+		t.Fatalf("expected unresolved comment, got %#v", got)
+	}
+	if got.PRNumber != 17 || got.PRURL != "https://github.com/miyataka/symphony/pull/17" {
+		t.Fatalf("unexpected pr metadata: %#v", got)
+	}
+	if got.Path != "go/orchestrator.go" || got.Line != 42 {
+		t.Fatalf("unexpected thread location: %#v", got)
+	}
+	if got.Author != "reviewer" || got.AuthorIsBot {
+		t.Fatalf("unexpected author: %#v", got)
+	}
+	if !strings.Contains(got.Body, "early return") {
+		t.Fatalf("unexpected body: %#v", got)
+	}
+	if got.URL != "https://github.com/miyataka/symphony/pull/17#discussion_r2" {
+		t.Fatalf("unexpected url: %#v", got)
+	}
+	if got.CreatedAt == nil || got.CreatedAt.Format("2006-01-02T15:04:05Z") != "2026-05-01T01:00:00Z" {
+		t.Fatalf("unexpected created at: %#v", got.CreatedAt)
+	}
+}
+
+func TestPRReviewCommentsFiltersBotEntriesBeforeLatestCommit(t *testing.T) {
+	content := issueContent{}
+	pr := pullRequestContent{
+		Number: 99,
+		URL:    "https://github.com/miyataka/symphony/pull/99",
+	}
+	pr.Commits.Nodes = []struct {
+		Commit struct {
+			CommittedDate string `json:"committedDate"`
+		} `json:"commit"`
+	}{{
+		Commit: struct {
+			CommittedDate string `json:"committedDate"`
+		}{CommittedDate: "2026-05-10T00:00:00Z"},
+	}}
+	thread := struct {
+		IsResolved bool   `json:"isResolved"`
+		Path       string `json:"path"`
+		Line       int    `json:"line"`
+		Comments   struct {
+			Nodes []reviewThreadCommentContent `json:"nodes"`
+		} `json:"comments"`
+	}{Path: "go/main.go", Line: 1}
+	thread.Comments.Nodes = []reviewThreadCommentContent{
+		{
+			ID:        "BOT_OLD",
+			Body:      "stale bot review",
+			URL:       "https://github.com/miyataka/symphony/pull/99#discussion_rOLD",
+			CreatedAt: "2026-05-09T23:00:00Z",
+			Author: struct {
+				Typename string `json:"__typename"`
+				Login    string `json:"login"`
+			}{Typename: "Bot", Login: "copilot-pull-request-reviewer"},
+		},
+		{
+			ID:        "BOT_NEW",
+			Body:      "fresh bot review",
+			URL:       "https://github.com/miyataka/symphony/pull/99#discussion_rNEW",
+			CreatedAt: "2026-05-10T00:30:00Z",
+			Author: struct {
+				Typename string `json:"__typename"`
+				Login    string `json:"login"`
+			}{Typename: "Bot", Login: "copilot-pull-request-reviewer"},
+		},
+		{
+			ID:        "USER_OLD",
+			Body:      "human feedback that predates latest push",
+			URL:       "https://github.com/miyataka/symphony/pull/99#discussion_rUSER",
+			CreatedAt: "2026-05-09T22:00:00Z",
+			Author: struct {
+				Typename string `json:"__typename"`
+				Login    string `json:"login"`
+			}{Typename: "User", Login: "reviewer"},
+		},
+	}
+	pr.ReviewThreads.Nodes = []struct {
+		IsResolved bool   `json:"isResolved"`
+		Path       string `json:"path"`
+		Line       int    `json:"line"`
+		Comments   struct {
+			Nodes []reviewThreadCommentContent `json:"nodes"`
+		} `json:"comments"`
+	}{thread}
+	content.ClosedByPullRequestsReferences.Nodes = []pullRequestContent{pr}
+
+	got := content.PRReviewComments("")
+	if len(got) != 2 {
+		t.Fatalf("expected old bot to be filtered out, got %d entries: %#v", len(got), got)
+	}
+	for _, comment := range got {
+		if comment.ID == "BOT_OLD" {
+			t.Fatalf("stale bot comment should be filtered: %#v", comment)
+		}
+		switch comment.ID {
+		case "BOT_NEW":
+			if !comment.AuthorIsBot {
+				t.Fatalf("BOT_NEW should be marked as bot: %#v", comment)
+			}
+		case "USER_OLD":
+			if comment.AuthorIsBot {
+				t.Fatalf("USER_OLD should not be marked as bot: %#v", comment)
+			}
+		}
+	}
+}
+
+func TestPRReviewCommentsSkipsWorkpadMarkerBodies(t *testing.T) {
+	content := issueContent{}
+	pr := pullRequestContent{Number: 1, URL: "https://github.com/example/repo/pull/1"}
+	thread := struct {
+		IsResolved bool   `json:"isResolved"`
+		Path       string `json:"path"`
+		Line       int    `json:"line"`
+		Comments   struct {
+			Nodes []reviewThreadCommentContent `json:"nodes"`
+		} `json:"comments"`
+	}{}
+	thread.Comments.Nodes = []reviewThreadCommentContent{{
+		ID:   "RC_WORKPAD",
+		Body: "## Claude Workpad\n\nrun summary",
+		Author: struct {
+			Typename string `json:"__typename"`
+			Login    string `json:"login"`
+		}{Typename: "User", Login: "miyataka"},
+	}}
+	pr.ReviewThreads.Nodes = []struct {
+		IsResolved bool   `json:"isResolved"`
+		Path       string `json:"path"`
+		Line       int    `json:"line"`
+		Comments   struct {
+			Nodes []reviewThreadCommentContent `json:"nodes"`
+		} `json:"comments"`
+	}{thread}
+	content.ClosedByPullRequestsReferences.Nodes = []pullRequestContent{pr}
+
+	if got := content.PRReviewComments("## Claude Workpad"); len(got) != 0 {
+		t.Fatalf("expected workpad marker comments to be filtered, got %#v", got)
+	}
+}
+
 func TestMergePullRequest(t *testing.T) {
 	var sawMutation bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

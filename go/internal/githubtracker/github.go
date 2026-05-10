@@ -405,6 +405,7 @@ func (c *Client) normalizeItem(item projectItem) (tracker.Issue, string, bool) {
 		Title:                   item.Content.Title,
 		Description:             item.Content.Body,
 		Comments:                item.Content.IssueComments(c.cfg.WorkpadMarker),
+		PRReviewComments:        item.Content.PRReviewComments(c.cfg.WorkpadMarker),
 		Priority:                priority,
 		State:                   state,
 		BranchName:              item.Content.BranchName(),
@@ -764,10 +765,33 @@ type pullRequestContent struct {
 	} `json:"comments"`
 	ReviewThreads struct {
 		Nodes []struct {
-			IsResolved bool `json:"isResolved"`
+			IsResolved bool   `json:"isResolved"`
+			Path       string `json:"path"`
+			Line       int    `json:"line"`
+			Comments   struct {
+				Nodes []reviewThreadCommentContent `json:"nodes"`
+			} `json:"comments"`
 		} `json:"nodes"`
 		TotalCount int `json:"totalCount"`
 	} `json:"reviewThreads"`
+	Commits struct {
+		Nodes []struct {
+			Commit struct {
+				CommittedDate string `json:"committedDate"`
+			} `json:"commit"`
+		} `json:"nodes"`
+	} `json:"commits"`
+}
+
+type reviewThreadCommentContent struct {
+	ID        string `json:"id"`
+	Body      string `json:"body"`
+	URL       string `json:"url"`
+	CreatedAt string `json:"createdAt"`
+	Author    struct {
+		Typename string `json:"__typename"`
+		Login    string `json:"login"`
+	} `json:"author"`
 }
 
 type statusCheckContent struct {
@@ -855,6 +879,48 @@ func (i issueContent) PullRequests() []tracker.PullRequest {
 			ReviewThreadCount:      pr.ReviewThreads.TotalCount,
 			UnresolvedThreadCount:  unresolvedThreads,
 		})
+	}
+	return out
+}
+
+func (i issueContent) PRReviewComments(workpadMarker string) []tracker.PRReviewComment {
+	markers := workpadMarkers(workpadMarker)
+	var out []tracker.PRReviewComment
+	for _, pr := range i.ClosedByPullRequestsReferences.Nodes {
+		var latestCommit *time.Time
+		for _, node := range pr.Commits.Nodes {
+			if t := parseTimePtr(node.Commit.CommittedDate); t != nil {
+				latestCommit = t
+			}
+		}
+		for _, thread := range pr.ReviewThreads.Nodes {
+			if thread.IsResolved {
+				continue
+			}
+			for _, comment := range thread.Comments.Nodes {
+				body := strings.TrimSpace(comment.Body)
+				if body == "" || containsAnyMarker(body, markers) {
+					continue
+				}
+				createdAt := parseTimePtr(comment.CreatedAt)
+				isBot := comment.Author.Typename == "Bot"
+				if isBot && latestCommit != nil && createdAt != nil && !createdAt.After(*latestCommit) {
+					continue
+				}
+				out = append(out, tracker.PRReviewComment{
+					ID:          comment.ID,
+					PRNumber:    pr.Number,
+					PRURL:       pr.URL,
+					Path:        thread.Path,
+					Line:        thread.Line,
+					Author:      comment.Author.Login,
+					AuthorIsBot: isBot,
+					Body:        body,
+					URL:         comment.URL,
+					CreatedAt:   createdAt,
+				})
+			}
+		}
 	}
 	return out
 }
@@ -1055,7 +1121,23 @@ content {
         comments(first: 1) { totalCount }
         reviewThreads(first: 100) {
           totalCount
-          nodes { isResolved }
+          nodes {
+            isResolved
+            path
+            line
+            comments(first: 20) {
+              nodes {
+                id
+                body
+                url
+                createdAt
+                author { __typename login }
+              }
+            }
+          }
+        }
+        commits(last: 1) {
+          nodes { commit { committedDate } }
         }
       }
     }
