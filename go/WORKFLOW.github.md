@@ -90,7 +90,7 @@ hooks:
         --title "$SYMPHONY_ISSUE_TITLE" --body-file "$body_file"
     rm -f "$body_file"
 agent:
-  kind: claude-code
+  kind: codex
   max_concurrent_agents: 4
   max_turns: 20
 ---

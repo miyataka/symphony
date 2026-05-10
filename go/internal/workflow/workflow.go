@@ -228,6 +228,10 @@ func (c *Config) Resolve() error {
 	default:
 		return fmt.Errorf("agent.kind must be \"codex\" or \"claude-code\", got %q", c.Agent.Kind)
 	}
+	if strings.TrimSpace(c.Agent.Command) == "" && c.Agent.Kind == "codex" {
+		c.Agent.Command = `mkdir -p .tmp
+TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp" codex exec --sandbox workspace-write --skip-git-repo-check < "$SYMPHONY_PROMPT_FILE"`
+	}
 	if strings.TrimSpace(c.Agent.Command) == "" && c.Agent.Kind == "claude-code" {
 		c.Agent.Command = `cat "$SYMPHONY_PROMPT_FILE" | claude -p --dangerously-skip-permissions`
 	}
