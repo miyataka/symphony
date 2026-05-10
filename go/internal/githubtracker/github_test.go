@@ -223,7 +223,7 @@ func TestFetchIssuesByStatesNormalizesLinkedPullRequests(t *testing.T) {
 	}
 }
 
-func TestFetchIssuesProjectQueryStaysUnderGitHubNestedNodeLimit(t *testing.T) {
+func TestFetchIssuesProjectQueryStaysUnderGitHubTotalNodeLimit(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload struct {
 			Query string `json:"query"`
@@ -234,12 +234,9 @@ func TestFetchIssuesProjectQueryStaysUnderGitHubNestedNodeLimit(t *testing.T) {
 		if payload.Query == "" {
 			t.Fatal("expected GraphQL query")
 		}
-		budget := graphqlFirstArgument(t, payload.Query, `items\s*\(\s*first:\s*(\d+)`) *
-			graphqlFirstArgument(t, payload.Query, `closedByPullRequestsReferences\s*\(\s*first:\s*(\d+)`) *
-			graphqlFirstArgument(t, payload.Query, `reviewThreads\s*\(\s*first:\s*(\d+)`) *
-			graphqlFirstArgument(t, payload.Query, `comments\s*\(\s*first:\s*(\d+)\s*\)\s*\{\s*nodes\s*\{\s*id\s+body\s+url\s+createdAt\s+author\s*\{\s*__typename\s+login\s*\}`)
+		budget := githubProjectQueryNodeBudget(t, payload.Query)
 		if budget > 500000 {
-			t.Fatalf("nested review-thread comments can request %d possible nodes, exceeding GitHub's 500000 limit", budget)
+			t.Fatalf("project query can request %d possible nodes, exceeding GitHub's 500000 limit", budget)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -274,6 +271,25 @@ func TestFetchIssuesProjectQueryStaysUnderGitHubNestedNodeLimit(t *testing.T) {
 	if _, err := client.FetchCandidateIssues(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func githubProjectQueryNodeBudget(t *testing.T, query string) int {
+	t.Helper()
+	items := graphqlFirstArgument(t, query, `items\s*\(\s*first:\s*(\d+)`)
+	closedPRs := graphqlFirstArgument(t, query, `closedByPullRequestsReferences\s*\(\s*first:\s*(\d+)`)
+	reviewThreads := graphqlFirstArgument(t, query, `reviewThreads\s*\(\s*first:\s*(\d+)`)
+
+	return items +
+		items*graphqlFirstArgument(t, query, `labels\s*\(\s*first:\s*(\d+)`) +
+		items*graphqlFirstArgument(t, query, `assignees\s*\(\s*first:\s*(\d+)`) +
+		items*graphqlFirstArgument(t, query, `comments\s*\(\s*first:\s*(\d+)\s*\)\s*\{\s*nodes\s*\{\s*id\s+body\s+url\s+createdAt\s+author\s*\{\s*login\s*\}`) +
+		items*closedPRs +
+		items*closedPRs*graphqlFirstArgument(t, query, `contexts\s*\(\s*first:\s*(\d+)`) +
+		items*closedPRs*graphqlFirstArgument(t, query, `comments\s*\(\s*first:\s*(\d+)\s*\)\s*\{\s*totalCount\s*\}`) +
+		items*closedPRs*reviewThreads +
+		items*closedPRs*reviewThreads*graphqlFirstArgument(t, query, `comments\s*\(\s*first:\s*(\d+)\s*\)\s*\{\s*nodes\s*\{\s*id\s+body\s+url\s+createdAt\s+author\s*\{\s*__typename\s+login\s*\}`) +
+		items*closedPRs*graphqlFirstArgument(t, query, `commits\s*\(\s*last:\s*(\d+)`) +
+		items*graphqlFirstArgument(t, query, `fieldValues\s*\(\s*first:\s*(\d+)`)
 }
 
 func graphqlFirstArgument(t *testing.T, query, pattern string) int {
