@@ -20,6 +20,8 @@ tracker:
   merging_state: Merging
   done_state: Done
   read_issue_dependencies: true
+  backlog_states:
+    - Backlog
   active_states:
     - Todo
     - In Progress
