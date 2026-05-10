@@ -193,6 +193,47 @@ func TestParseConfigResolvesObservabilityOptions(t *testing.T) {
 	}
 }
 
+func TestParseConfigResolvesObservabilityLogFile(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	t.Setenv("SYMPHONY_LOG_DIR", "/tmp/symphony-logs")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"observability": map[string]any{
+			"log_file": "~/symphony-logs/runtime.log",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := filepath.Join(home, "symphony-logs", "runtime.log")
+	if cfg.Observability.LogFile != expected {
+		t.Fatalf("log_file not expanded: got %q, want %q", cfg.Observability.LogFile, expected)
+	}
+}
+
+func TestParseConfigDefaultsObservabilityLogFileToEmpty(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Observability.LogFile != "" {
+		t.Fatalf("expected empty log_file by default, got %q", cfg.Observability.LogFile)
+	}
+}
+
 func TestParseConfigRejectsInvalidObservabilityLogLevel(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-token")
 	_, err := ParseConfig(map[string]any{
