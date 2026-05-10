@@ -18,6 +18,7 @@ tracker.
 6. Runs `agent.command` inside the workspace with issue metadata in environment variables
 7. Reconciles running work against GitHub Project status and retries failed runs with backoff
 8. Updates GitHub Project status and a persistent `## Codex Workpad` issue comment when possible
+9. Monitors long-running issue loops and creates backlog sub-issues when work needs to be split
 
 ## Requirements
 
@@ -25,6 +26,7 @@ tracker.
 - A GitHub token with access to the target Project v2 and its issues
 - `read:project` permission for classic PATs, or equivalent fine-grained project access
 - `Issues: read` permission when `tracker.read_issue_dependencies` is enabled
+- `Issues: write` permission when `loop_monitor.enabled` is true and sub-issue creation is needed
 
 ## Run
 
@@ -142,6 +144,12 @@ pull_request:
   require_approval: true
   require_passing_checks: true
   required_check_names: []
+loop_monitor:
+  enabled: true
+  interval_ms: 3600000
+  max_runtime_ms: 21600000
+  min_turns: 3
+  sub_issue_state: Backlog
 workspace:
   root: ~/code/symphony-workspaces
   cleanup_orphans: false
@@ -253,6 +261,18 @@ lifecycle. To make backlog items eligible for agent runs, move them to `Todo` (o
 It also creates or updates one issue comment containing `tracker.workpad_marker`, defaulting to
 `## Codex Workpad`. This comment is the handoff surface for workspace path, status, and execution
 notes.
+
+## Loop monitor
+
+When `loop_monitor.enabled` is true, Symphony checks running issues every
+`loop_monitor.interval_ms` milliseconds. If a run has exceeded `loop_monitor.max_runtime_ms` and
+has completed at least `loop_monitor.min_turns`, Symphony treats it as a suspected loop, creates a
+new issue in the same repository, adds it to the configured GitHub Project, moves it to
+`loop_monitor.sub_issue_state`, and records the created sub-issue in the parent Workpad. Each
+running issue can trigger this once per Symphony process run.
+
+The default interval is one hour, the default runtime threshold is six hours, the default minimum
+turn count is three, and new breakdown issues default to `Backlog`.
 
 ## Issue dependencies
 

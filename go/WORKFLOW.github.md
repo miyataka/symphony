@@ -42,6 +42,12 @@ observability:
   log_level: info
   # Persist runtime logs so another shell can `tail -f` or `rg` them.
   log_file: ~/symphony-logs/symphony.log
+loop_monitor:
+  enabled: true
+  interval_ms: 3600000
+  max_runtime_ms: 21600000
+  min_turns: 3
+  sub_issue_state: Backlog
 pull_request:
   auto_merge: false
   merge_method: MERGE

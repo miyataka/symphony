@@ -464,6 +464,100 @@ func TestDispatchRetryRefreshesIssueStateBeforeDispatch(t *testing.T) {
 	}
 }
 
+func TestCheckLoopingRunsCreatesSubIssueOnce(t *testing.T) {
+	recorder := &recordingTracker{
+		createdIssue: tracker.Issue{
+			ID:         "I_CHILD",
+			Identifier: "miyataka/symphony#42",
+			URL:        "https://github.com/miyataka/symphony/issues/42",
+		},
+	}
+	cfg := testConfig()
+	cfg.LoopMonitor.MaxRuntimeMS = 1000
+	cfg.LoopMonitor.MinTurns = 2
+	cfg.LoopMonitor.SubIssueState = "Backlog"
+	service := New(Options{
+		Config:  cfg,
+		Tracker: recorder,
+	})
+	service.running["I_1"] = &runHandle{
+		issue: tracker.Issue{
+			ID:                      "I_1",
+			Identifier:              "miyataka/symphony#1",
+			Title:                   "Looping issue",
+			State:                   "In Progress",
+			URL:                     "https://github.com/miyataka/symphony/issues/1",
+			RepositoryNameWithOwner: "miyataka/symphony",
+		},
+		startedAt: time.Now().Add(-2 * time.Second),
+		turnCount: 2,
+	}
+
+	service.checkLoopingRuns(context.Background())
+	service.checkLoopingRuns(context.Background())
+
+	if len(recorder.createdIssues) != 1 {
+		t.Fatalf("expected one created sub-issue, got %d", len(recorder.createdIssues))
+	}
+	creation := recorder.createdIssues[0]
+	if creation.RepositoryNameWithOwner != "miyataka/symphony" {
+		t.Fatalf("unexpected repository: %q", creation.RepositoryNameWithOwner)
+	}
+	if creation.Title != "Break down miyataka/symphony#1" {
+		t.Fatalf("unexpected title: %q", creation.Title)
+	}
+	if creation.ProjectState != "Backlog" {
+		t.Fatalf("unexpected project state: %q", creation.ProjectState)
+	}
+	for _, want := range []string{"Loop suspected", "miyataka/symphony#1", "Completed turns: 2"} {
+		if !strings.Contains(creation.Body, want) {
+			t.Fatalf("expected created issue body to contain %q, got: %q", want, creation.Body)
+		}
+	}
+	if !strings.Contains(recorder.workpad, "Created sub-issue https://github.com/miyataka/symphony/issues/42") {
+		t.Fatalf("expected workpad to mention created sub-issue, got: %q", recorder.workpad)
+	}
+}
+
+func TestCheckLoopingRunsWaitsForRuntimeAndTurns(t *testing.T) {
+	recorder := &recordingTracker{}
+	cfg := testConfig()
+	cfg.LoopMonitor.MaxRuntimeMS = 1000
+	cfg.LoopMonitor.MinTurns = 2
+	service := New(Options{
+		Config:  cfg,
+		Tracker: recorder,
+	})
+	service.running["TOO_NEW"] = &runHandle{
+		issue: tracker.Issue{
+			ID:                      "TOO_NEW",
+			Identifier:              "miyataka/symphony#1",
+			Title:                   "New issue",
+			State:                   "In Progress",
+			RepositoryNameWithOwner: "miyataka/symphony",
+		},
+		startedAt: time.Now(),
+		turnCount: 2,
+	}
+	service.running["TOO_FEW_TURNS"] = &runHandle{
+		issue: tracker.Issue{
+			ID:                      "TOO_FEW_TURNS",
+			Identifier:              "miyataka/symphony#2",
+			Title:                   "Single turn",
+			State:                   "In Progress",
+			RepositoryNameWithOwner: "miyataka/symphony",
+		},
+		startedAt: time.Now().Add(-2 * time.Second),
+		turnCount: 1,
+	}
+
+	service.checkLoopingRuns(context.Background())
+
+	if len(recorder.createdIssues) != 0 {
+		t.Fatalf("expected no created sub-issues, got %d", len(recorder.createdIssues))
+	}
+}
+
 func TestRunIssuePropagatesAfterRunHookFailure(t *testing.T) {
 	cfg := testConfig()
 	cfg.Workspace.Root = t.TempDir()
@@ -537,6 +631,8 @@ type recordingTracker struct {
 	mergeMethod        string
 	issueStatesByID    []tracker.Issue
 	fetchIssueStateIDs [][]string
+	createdIssues      []tracker.IssueCreation
+	createdIssue       tracker.Issue
 }
 
 func (r *recordingTracker) FetchCandidateIssues(context.Context) ([]tracker.Issue, error) {
@@ -566,4 +662,12 @@ func (r *recordingTracker) MergePullRequest(_ context.Context, _ tracker.Issue, 
 	r.mergedPRID = pr.ID
 	r.mergeMethod = opts.Method
 	return nil
+}
+
+func (r *recordingTracker) CreateIssue(_ context.Context, creation tracker.IssueCreation) (tracker.Issue, error) {
+	r.createdIssues = append(r.createdIssues, creation)
+	if r.createdIssue.ID != "" {
+		return r.createdIssue, nil
+	}
+	return tracker.Issue{ID: "I_CREATED", Identifier: creation.RepositoryNameWithOwner + "#2"}, nil
 }

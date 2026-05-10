@@ -511,6 +511,118 @@ func (c *Client) MergePullRequest(ctx context.Context, issue tracker.Issue, pr t
 	return response.err()
 }
 
+func (c *Client) CreateIssue(ctx context.Context, creation tracker.IssueCreation) (tracker.Issue, error) {
+	repository := normalize(creation.RepositoryNameWithOwner)
+	owner, repo, ok := strings.Cut(repository, "/")
+	if !ok || owner == "" || repo == "" {
+		return tracker.Issue{}, fmt.Errorf("repository must be owner/name, got %q", creation.RepositoryNameWithOwner)
+	}
+	title := strings.TrimSpace(creation.Title)
+	if title == "" {
+		return tracker.Issue{}, errors.New("issue title is required")
+	}
+	body := strings.TrimSpace(creation.Body)
+
+	created, err := c.createRepositoryIssue(ctx, owner, repo, title, body)
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+	created.RepositoryNameWithOwner = repository
+
+	projectItemID, err := c.addIssueToProject(ctx, created.ID)
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+	created.ProjectItemID = projectItemID
+
+	if state := strings.TrimSpace(creation.ProjectState); state != "" {
+		if err := c.UpdateIssueState(ctx, created, state); err != nil {
+			return tracker.Issue{}, err
+		}
+		created.State = state
+	}
+
+	return created, nil
+}
+
+func (c *Client) createRepositoryIssue(ctx context.Context, owner, repo, title, body string) (tracker.Issue, error) {
+	payload, err := json.Marshal(map[string]string{
+		"title": title,
+		"body":  body,
+	})
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+	requestURL := fmt.Sprintf("%s/repos/%s/%s/issues", c.restEndpoint, url.PathEscape(owner), url.PathEscape(repo))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(payload))
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return tracker.Issue{}, fmt.Errorf("github create issue status %d: %s", resp.StatusCode, string(responseBody))
+	}
+	var created struct {
+		NodeID  string `json:"node_id"`
+		Number  int    `json:"number"`
+		HTMLURL string `json:"html_url"`
+		Title   string `json:"title"`
+		Body    string `json:"body"`
+	}
+	if err := json.Unmarshal(responseBody, &created); err != nil {
+		return tracker.Issue{}, err
+	}
+	identifier := owner + "/" + repo
+	if created.Number > 0 {
+		identifier += "#" + strconv.Itoa(created.Number)
+	}
+	return tracker.Issue{
+		ID:                      created.NodeID,
+		Identifier:              identifier,
+		Title:                   created.Title,
+		Description:             created.Body,
+		URL:                     created.HTMLURL,
+		RepositoryNameWithOwner: owner + "/" + repo,
+	}, nil
+}
+
+func (c *Client) addIssueToProject(ctx context.Context, issueID string) (string, error) {
+	if issueID == "" {
+		return "", errors.New("issue id is required")
+	}
+	metadata, err := c.fetchProjectMetadata(ctx)
+	if err != nil {
+		return "", err
+	}
+	var response addProjectItemResponse
+	if err := c.graphql(ctx, addProjectItemByIDMutation, map[string]any{
+		"projectId": metadata.ProjectID,
+		"contentId": issueID,
+	}, &response); err != nil {
+		return "", err
+	}
+	if len(response.Errors) > 0 {
+		return "", fmt.Errorf("github graphql: %s", response.Errors[0].Message)
+	}
+	if response.Data.AddProjectV2ItemByID.Item.ID == "" {
+		return "", errors.New("github graphql: project item id missing")
+	}
+	return response.Data.AddProjectV2ItemByID.Item.ID, nil
+}
+
 func (c *Client) findWorkpadCommentID(ctx context.Context, issueID, marker string) (string, error) {
 	var response issueCommentsResponse
 	if err := c.graphql(ctx, issueCommentsQuery, map[string]any{"id": issueID}, &response); err != nil {
@@ -655,6 +767,19 @@ type issueCommentsResponse struct {
 				} `json:"nodes"`
 			} `json:"comments"`
 		} `json:"node"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type addProjectItemResponse struct {
+	Data struct {
+		AddProjectV2ItemByID struct {
+			Item struct {
+				ID string `json:"id"`
+			} `json:"item"`
+		} `json:"addProjectV2ItemById"`
 	} `json:"data"`
 	Errors []struct {
 		Message string `json:"message"`
@@ -1213,6 +1338,13 @@ mutation SymphonyUpdateProjectStatus($projectId: ID!, $itemId: ID!, $fieldId: ID
     value: { singleSelectOptionId: $optionId }
   }) {
     projectV2Item { id }
+  }
+}`
+
+const addProjectItemByIDMutation = `
+mutation SymphonyAddIssueToProject($projectId: ID!, $contentId: ID!) {
+  addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
+    item { id }
   }
 }`
 

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseWorkflowWithFrontMatter(t *testing.T) {
@@ -231,6 +232,69 @@ func TestParseConfigDefaultsObservabilityLogFileToEmpty(t *testing.T) {
 	}
 	if cfg.Observability.LogFile != "" {
 		t.Fatalf("expected empty log_file by default, got %q", cfg.Observability.LogFile)
+	}
+}
+
+func TestParseConfigResolvesLoopMonitorDefaults(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.LoopMonitor.Enabled {
+		t.Fatal("expected loop monitor to default enabled")
+	}
+	if cfg.LoopMonitor.IntervalMS != int((time.Hour)/time.Millisecond) {
+		t.Fatalf("unexpected loop monitor interval: %d", cfg.LoopMonitor.IntervalMS)
+	}
+	if cfg.LoopMonitor.MaxRuntimeMS != int((6*time.Hour)/time.Millisecond) {
+		t.Fatalf("unexpected loop monitor max runtime: %d", cfg.LoopMonitor.MaxRuntimeMS)
+	}
+	if cfg.LoopMonitor.MinTurns != 3 {
+		t.Fatalf("unexpected loop monitor min turns: %d", cfg.LoopMonitor.MinTurns)
+	}
+	if cfg.LoopMonitor.SubIssueState != "Backlog" {
+		t.Fatalf("unexpected loop monitor sub issue state: %q", cfg.LoopMonitor.SubIssueState)
+	}
+}
+
+func TestParseConfigResolvesLoopMonitorOverrides(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"loop_monitor": map[string]any{
+			"enabled":         false,
+			"interval_ms":     5000,
+			"max_runtime_ms":  60000,
+			"min_turns":       2,
+			"sub_issue_state": "Todo",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LoopMonitor.Enabled {
+		t.Fatal("expected loop monitor to honor enabled=false")
+	}
+	if cfg.LoopMonitor.IntervalMS != 5000 {
+		t.Fatalf("unexpected loop monitor interval: %d", cfg.LoopMonitor.IntervalMS)
+	}
+	if cfg.LoopMonitor.MaxRuntimeMS != 60000 {
+		t.Fatalf("unexpected loop monitor max runtime: %d", cfg.LoopMonitor.MaxRuntimeMS)
+	}
+	if cfg.LoopMonitor.MinTurns != 2 {
+		t.Fatalf("unexpected loop monitor min turns: %d", cfg.LoopMonitor.MinTurns)
+	}
+	if cfg.LoopMonitor.SubIssueState != "Todo" {
+		t.Fatalf("unexpected loop monitor sub issue state: %q", cfg.LoopMonitor.SubIssueState)
 	}
 }
 
