@@ -92,6 +92,7 @@ type AgentConfig struct {
 type ObservabilityConfig struct {
 	LogJSON  bool   `yaml:"log_json"`
 	LogLevel string `yaml:"log_level"`
+	LogFile  string `yaml:"log_file"`
 }
 
 // ErrFrontMatterNotMap is returned when YAML front matter decodes to a non-object value.
@@ -308,6 +309,7 @@ func (c *Config) Resolve() error {
 	default:
 		return fmt.Errorf("observability.log_level must be debug, info, warn, or error, got %q", c.Observability.LogLevel)
 	}
+	c.Observability.LogFile = expandPath(resolveEnv(c.Observability.LogFile))
 
 	switch c.Tracker.Kind {
 	case "github":

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -37,14 +38,24 @@ func run(args []string) {
 		handleArgumentError(err)
 	}
 
-	logger := newLogger(false, "info")
+	logger := newLogger(false, "info", os.Stdout)
 
 	def, cfg, err := loadWorkflow(workflowPath)
 	if err != nil {
 		logger.Error("failed to load workflow", "path", workflowPath, "error", err)
 		os.Exit(1)
 	}
-	logger = newLogger(cfg.Observability.LogJSON, cfg.Observability.LogLevel)
+
+	logWriter, closeLog, err := openLogWriter(cfg.Observability.LogFile)
+	if err != nil {
+		logger.Error("failed to open observability log file", "path", cfg.Observability.LogFile, "error", err)
+		os.Exit(1)
+	}
+	defer closeLog()
+	logger = newLogger(cfg.Observability.LogJSON, cfg.Observability.LogLevel, logWriter)
+	if cfg.Observability.LogFile != "" {
+		logger.Info("observability log file enabled", "path", cfg.Observability.LogFile)
+	}
 
 	tracker, err := githubtracker.NewWithLogger(cfg.Tracker, logger.With("component", "githubtracker"))
 	if err != nil {
@@ -68,12 +79,28 @@ func run(args []string) {
 	}
 }
 
-func newLogger(logJSON bool, levelName string) *slog.Logger {
+func newLogger(logJSON bool, levelName string, w io.Writer) *slog.Logger {
 	opts := &slog.HandlerOptions{Level: slogLevel(levelName)}
 	if logJSON {
-		return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+		return slog.New(slog.NewJSONHandler(w, opts))
 	}
-	return slog.New(slog.NewTextHandler(os.Stdout, opts))
+	return slog.New(slog.NewTextHandler(w, opts))
+}
+
+func openLogWriter(path string) (io.Writer, func() error, error) {
+	if strings.TrimSpace(path) == "" {
+		return os.Stdout, func() error { return nil }, nil
+	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, nil, fmt.Errorf("create log directory %q: %w", dir, err)
+		}
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open log file %q: %w", path, err)
+	}
+	return io.MultiWriter(os.Stdout, file), file.Close, nil
 }
 
 func slogLevel(name string) slog.Level {
