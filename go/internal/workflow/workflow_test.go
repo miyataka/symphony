@@ -58,6 +58,16 @@ func TestGitHubWorkflowKeepsRuntimeFilesOutOfAgentCommits(t *testing.T) {
 	if !strings.Contains(workflow, "{{ range .Issue.Comments }}") {
 		t.Fatal("expected GitHub workflow to include issue comments in agent prompt")
 	}
+	if !strings.Contains(workflow, "{{ range .Issue.PullRequests }}") {
+		t.Fatal("expected GitHub workflow to include linked pull requests in agent prompt")
+	}
+	if !strings.Contains(workflow, "{{ range .Checks }}") {
+		t.Fatal("expected GitHub workflow to include pull request check statuses in agent prompt")
+	}
+	if !strings.Contains(workflow, `issue_number="${SYMPHONY_ISSUE_IDENTIFIER##*#}"`) ||
+		!strings.Contains(workflow, `Closes #$issue_number`) {
+		t.Fatal("expected GitHub workflow to create PRs with a closing issue reference")
+	}
 }
 
 func TestParseWorkflowAcceptsUnterminatedFrontMatter(t *testing.T) {

@@ -19,7 +19,6 @@ tracker:
   rework_state: Rework
   merging_state: Merging
   done_state: Done
-  workpad_marker: "## Codex Workpad"
   read_issue_dependencies: true
   active_states:
     - Todo
@@ -72,16 +71,16 @@ hooks:
     git add -A -- . ':(exclude).symphony' ':(exclude).tmp'
     git commit -m "$SYMPHONY_ISSUE_IDENTIFIER: agent update"
     git push -u origin "$SYMPHONY_BRANCH"
+    issue_number="${SYMPHONY_ISSUE_IDENTIFIER##*#}"
     gh pr view "$SYMPHONY_BRANCH" --repo "$SYMPHONY_REPOSITORY" >/dev/null 2>&1 || \
       gh pr create --repo "$SYMPHONY_REPOSITORY" --head "$SYMPHONY_BRANCH" \
-        --title "$SYMPHONY_ISSUE_TITLE" --body "Automated work for $SYMPHONY_ISSUE_URL"
+        --title "$SYMPHONY_ISSUE_TITLE" --body "Automated work for $SYMPHONY_ISSUE_URL
+
+Closes #$issue_number"
 agent:
+  kind: claude-code
   max_concurrent_agents: 4
   max_turns: 20
-  command: |
-    mkdir -p .tmp
-    TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp" \
-      codex exec --sandbox workspace-write --skip-git-repo-check < "$SYMPHONY_PROMPT_FILE"
 ---
 
 You are working on GitHub issue {{ .Issue.Identifier }}.
@@ -99,6 +98,17 @@ Description:
 {{ range .Issue.Comments }}
 - {{ .Author }} {{ .URL }}
 {{ .Body }}
+{{ end }}
+{{ end }}
+
+{{ if .Issue.PullRequests }}Linked pull requests:
+{{ range .Issue.PullRequests }}
+- #{{ .Number }} {{ .State }} {{ .URL }}
+  Review: {{ .ReviewDecision }}
+  Checks: {{ .StatusCheckRollupState }}
+{{ if .Checks }}  Check details:
+{{ range .Checks }}  - {{ .Name }}: {{ .State }}
+{{ end }}{{ end }}
 {{ end }}
 {{ end }}
 
