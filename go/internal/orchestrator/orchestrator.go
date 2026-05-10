@@ -39,10 +39,12 @@ type Service struct {
 }
 
 type runHandle struct {
-	cancel     context.CancelFunc
-	issue      tracker.Issue
-	startedAt  time.Time
-	retryCount int
+	cancel       context.CancelFunc
+	issue        tracker.Issue
+	startedAt    time.Time
+	retryCount   int
+	turnCount    int
+	loopReported bool
 }
 
 func New(opts Options) *Service {
@@ -77,6 +79,13 @@ func (s *Service) Run(ctx context.Context) error {
 
 	ticker := time.NewTicker(s.cfg.PollInterval())
 	defer ticker.Stop()
+	var loopTicker *time.Ticker
+	var loopC <-chan time.Time
+	if s.cfg.LoopMonitor.Enabled {
+		loopTicker = time.NewTicker(s.cfg.LoopMonitorInterval())
+		defer loopTicker.Stop()
+		loopC = loopTicker.C
+	}
 
 	for {
 		select {
@@ -87,6 +96,8 @@ func (s *Service) Run(ctx context.Context) error {
 			if err := s.poll(ctx); err != nil {
 				s.logger.Warn("poll failed", "error", err)
 			}
+		case <-loopC:
+			s.checkLoopingRuns(ctx)
 		}
 	}
 }
@@ -282,6 +293,7 @@ func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) error {
 		if err := workspace.RunAfter(ctx, path, s.cfg.Hooks, issue, s.cfg.HookTimeout()); err != nil {
 			return fmt.Errorf("after_run hook: %w", err)
 		}
+		s.recordCompletedTurn(issue.ID, turn)
 		s.upsertWorkpad(ctx, issue, s.workpadBody(issue, "Running", path, fmt.Sprintf("Completed turn %d.", turn)))
 
 		refreshed, active, err := s.refreshIssue(ctx, issue.ID)
@@ -297,6 +309,100 @@ func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) error {
 		issue = refreshed
 	}
 	return nil
+}
+
+func (s *Service) recordCompletedTurn(issueID string, turn int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if handle, ok := s.running[issueID]; ok && turn > handle.turnCount {
+		handle.turnCount = turn
+	}
+}
+
+func (s *Service) checkLoopingRuns(ctx context.Context) {
+	if !s.cfg.LoopMonitor.Enabled {
+		return
+	}
+	creator := s.issueCreator()
+	if creator == nil {
+		s.logger.Warn("loop monitor enabled but tracker does not support issue creation")
+		return
+	}
+
+	type candidate struct {
+		issue     tracker.Issue
+		turnCount int
+		runtime   time.Duration
+	}
+	now := time.Now()
+	candidates := []candidate{}
+
+	s.mu.Lock()
+	for _, handle := range s.running {
+		runtime := now.Sub(handle.startedAt)
+		if handle.loopReported || runtime < s.cfg.LoopMonitorMaxRuntime() || handle.turnCount < s.cfg.LoopMonitor.MinTurns {
+			continue
+		}
+		handle.loopReported = true
+		candidates = append(candidates, candidate{
+			issue:     handle.issue,
+			turnCount: handle.turnCount,
+			runtime:   runtime,
+		})
+	}
+	s.mu.Unlock()
+
+	for _, candidate := range candidates {
+		child, err := s.createLoopSubIssue(ctx, candidate.issue, candidate.turnCount, candidate.runtime)
+		if err != nil {
+			s.logger.Warn("failed to create loop sub-issue", "issue_id", candidate.issue.ID, "issue_identifier", candidate.issue.Identifier, "error", err)
+			continue
+		}
+		s.logger.Warn("looping issue suspected; sub-issue created", "issue_id", candidate.issue.ID, "issue_identifier", candidate.issue.Identifier, "sub_issue", child.Identifier, "runtime", candidate.runtime.String(), "turns", candidate.turnCount)
+	}
+}
+
+func (s *Service) createLoopSubIssue(ctx context.Context, issue tracker.Issue, turnCount int, runtime time.Duration) (tracker.Issue, error) {
+	creator := s.issueCreator()
+	if creator == nil {
+		return tracker.Issue{}, errors.New("tracker does not support issue creation")
+	}
+	body := s.loopSubIssueBody(issue, turnCount, runtime)
+	child, err := creator.CreateIssue(ctx, tracker.IssueCreation{
+		RepositoryNameWithOwner: issue.RepositoryNameWithOwner,
+		Title:                   "Break down " + issue.Identifier,
+		Body:                    body,
+		ProjectState:            s.cfg.LoopMonitor.SubIssueState,
+	})
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+	childRef := child.URL
+	if childRef == "" {
+		childRef = child.Identifier
+	}
+	note := fmt.Sprintf("Loop suspected after %s and %d completed turns. Created sub-issue %s.", runtime.Round(time.Second), turnCount, childRef)
+	s.upsertWorkpad(ctx, issue, s.workpadBody(issue, issue.State, "", note))
+	return child, nil
+}
+
+func (s *Service) loopSubIssueBody(issue tracker.Issue, turnCount int, runtime time.Duration) string {
+	lines := []string{
+		"Loop suspected for " + issue.Identifier,
+		"",
+		"Parent: " + issue.Identifier,
+	}
+	if issue.URL != "" {
+		lines = append(lines, "Parent URL: "+issue.URL)
+	}
+	lines = append(lines,
+		"Runtime: "+runtime.Round(time.Second).String(),
+		fmt.Sprintf("Completed turns: %d", turnCount),
+		"State: "+issue.State,
+		"",
+		"Split this work into smaller, independently verifiable tasks before continuing the parent issue.",
+	)
+	return strings.Join(lines, "\n")
 }
 
 func (s *Service) handleSuccessfulRun(ctx context.Context, issue tracker.Issue) {
@@ -527,6 +633,13 @@ func (s *Service) writeback() tracker.Writeback {
 func (s *Service) pullRequestMerger() tracker.PullRequestMerger {
 	if merger, ok := s.tracker.(tracker.PullRequestMerger); ok {
 		return merger
+	}
+	return nil
+}
+
+func (s *Service) issueCreator() tracker.IssueCreator {
+	if creator, ok := s.tracker.(tracker.IssueCreator); ok {
+		return creator
 	}
 	return nil
 }

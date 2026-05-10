@@ -85,6 +85,13 @@ type MergeOptions struct {
 	CommitHeadline string
 }
 
+type IssueCreation struct {
+	RepositoryNameWithOwner string
+	Title                   string
+	Body                    string
+	ProjectState            string
+}
+
 func (p PullRequest) HasActionableFeedback() bool {
 	return p.ReviewDecision == "CHANGES_REQUESTED" || p.UnresolvedThreadCount > 0
 }
@@ -155,6 +162,10 @@ type Writeback interface {
 
 type PullRequestMerger interface {
 	MergePullRequest(context.Context, Issue, PullRequest, MergeOptions) error
+}
+
+type IssueCreator interface {
+	CreateIssue(context.Context, IssueCreation) (Issue, error)
 }
 
 func (i Issue) Env() []string {

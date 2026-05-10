@@ -25,6 +25,7 @@ type Config struct {
 	Hooks         HooksConfig         `yaml:"hooks"`
 	Agent         AgentConfig         `yaml:"agent"`
 	Observability ObservabilityConfig `yaml:"observability"`
+	LoopMonitor   LoopMonitorConfig   `yaml:"loop_monitor"`
 }
 
 type TrackerConfig struct {
@@ -93,6 +94,14 @@ type ObservabilityConfig struct {
 	LogJSON  bool   `yaml:"log_json"`
 	LogLevel string `yaml:"log_level"`
 	LogFile  string `yaml:"log_file"`
+}
+
+type LoopMonitorConfig struct {
+	Enabled       bool   `yaml:"enabled"`
+	IntervalMS    int    `yaml:"interval_ms"`
+	MaxRuntimeMS  int    `yaml:"max_runtime_ms"`
+	MinTurns      int    `yaml:"min_turns"`
+	SubIssueState string `yaml:"sub_issue_state"`
 }
 
 // ErrFrontMatterNotMap is returned when YAML front matter decodes to a non-object value.
@@ -210,6 +219,13 @@ func defaultConfig() Config {
 			MaxRetryBackoffMS:          int((5 * time.Minute) / time.Millisecond),
 			TurnTimeoutMS:              int((60 * time.Minute) / time.Millisecond),
 		},
+		LoopMonitor: LoopMonitorConfig{
+			Enabled:       true,
+			IntervalMS:    int(time.Hour / time.Millisecond),
+			MaxRuntimeMS:  int((6 * time.Hour) / time.Millisecond),
+			MinTurns:      3,
+			SubIssueState: "Backlog",
+		},
 	}
 }
 
@@ -304,6 +320,19 @@ TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp" codex exec --sandbox workspa
 	if c.Hooks.TimeoutMS <= 0 {
 		c.Hooks.TimeoutMS = int((60 * time.Second) / time.Millisecond)
 	}
+	if c.LoopMonitor.IntervalMS <= 0 {
+		c.LoopMonitor.IntervalMS = int(time.Hour / time.Millisecond)
+	}
+	if c.LoopMonitor.MaxRuntimeMS <= 0 {
+		c.LoopMonitor.MaxRuntimeMS = int((6 * time.Hour) / time.Millisecond)
+	}
+	if c.LoopMonitor.MinTurns <= 0 {
+		c.LoopMonitor.MinTurns = 3
+	}
+	c.LoopMonitor.SubIssueState = strings.TrimSpace(c.LoopMonitor.SubIssueState)
+	if c.LoopMonitor.SubIssueState == "" {
+		c.LoopMonitor.SubIssueState = "Backlog"
+	}
 	c.Observability.LogLevel = strings.ToLower(strings.TrimSpace(c.Observability.LogLevel))
 	if c.Observability.LogLevel == "" {
 		c.Observability.LogLevel = "info"
@@ -388,6 +417,14 @@ func (c Config) HookTimeout() time.Duration {
 
 func (c Config) TurnTimeout() time.Duration {
 	return time.Duration(c.Agent.TurnTimeoutMS) * time.Millisecond
+}
+
+func (c Config) LoopMonitorInterval() time.Duration {
+	return time.Duration(c.LoopMonitor.IntervalMS) * time.Millisecond
+}
+
+func (c Config) LoopMonitorMaxRuntime() time.Duration {
+	return time.Duration(c.LoopMonitor.MaxRuntimeMS) * time.Millisecond
 }
 
 func (c Config) MaxRetryBackoff() time.Duration {

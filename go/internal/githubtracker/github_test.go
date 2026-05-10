@@ -831,6 +831,83 @@ func TestUpsertWorkpadCreatesAndUpdatesComment(t *testing.T) {
 	}
 }
 
+func TestCreateIssueAddsIssueToProjectWithState(t *testing.T) {
+	var createdIssue, addedToProject, updatedState bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && r.URL.Path == "/repos/miyataka/symphony/issues" {
+			createdIssue = true
+			var payload map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["title"] != "Break down miyataka/symphony#1" {
+				t.Fatalf("unexpected issue title: %#v", payload)
+			}
+			if !strings.Contains(payload["body"], "Loop suspected") {
+				t.Fatalf("unexpected issue body: %#v", payload)
+			}
+			_, _ = w.Write([]byte(`{"node_id":"I_CHILD","number":42,"html_url":"https://github.com/miyataka/symphony/issues/42","title":"Break down miyataka/symphony#1","body":"Loop suspected"}`))
+			return
+		}
+
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case strings.Contains(payload.Query, "SymphonyGitHubUserProject"):
+			_, _ = w.Write([]byte(`{"data":{"user":{"projectV2":{"id":"P_1","fields":{"nodes":[{"__typename":"ProjectV2SingleSelectField","id":"F_STATUS","name":"Status","options":[{"id":"OPT_BACKLOG","name":"Backlog"}]}]}}}}}`))
+		case strings.Contains(payload.Query, "SymphonyAddIssueToProject"):
+			addedToProject = true
+			if payload.Variables["contentId"] != "I_CHILD" {
+				t.Fatalf("unexpected add project variables: %#v", payload.Variables)
+			}
+			_, _ = w.Write([]byte(`{"data":{"addProjectV2ItemById":{"item":{"id":"ITEM_CHILD"}}}}`))
+		case strings.Contains(payload.Query, "SymphonyUpdateProjectStatus"):
+			updatedState = true
+			if payload.Variables["itemId"] != "ITEM_CHILD" || payload.Variables["optionId"] != "OPT_BACKLOG" {
+				t.Fatalf("unexpected status variables: %#v", payload.Variables)
+			}
+			_, _ = w.Write([]byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"ITEM_CHILD"}}}}`))
+		default:
+			t.Fatalf("unexpected request path=%s query=%s", r.URL.Path, payload.Query)
+		}
+	}))
+	defer server.Close()
+
+	client, err := New(workflow.TrackerConfig{
+		Token:         "token",
+		Endpoint:      server.URL,
+		RestEndpoint:  server.URL,
+		Owner:         "miyataka",
+		OwnerType:     "user",
+		ProjectNumber: 1,
+		StatusField:   "Status",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := client.CreateIssue(context.Background(), tracker.IssueCreation{
+		RepositoryNameWithOwner: "miyataka/symphony",
+		Title:                   "Break down miyataka/symphony#1",
+		Body:                    "Loop suspected",
+		ProjectState:            "Backlog",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.ID != "I_CHILD" || child.ProjectItemID != "ITEM_CHILD" || child.Identifier != "miyataka/symphony#42" {
+		t.Fatalf("unexpected child issue: %#v", child)
+	}
+	if !createdIssue || !addedToProject || !updatedState {
+		t.Fatalf("expected create/add/update, create=%t add=%t update=%t", createdIssue, addedToProject, updatedState)
+	}
+}
+
 func trackerIssue(id, itemID string) tracker.Issue {
 	return tracker.Issue{
 		ID:            id,
