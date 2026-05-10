@@ -88,6 +88,7 @@ agent:
 Use YAML front matter plus a Go `text/template` prompt body. The prompt receives:
 
 - `.Issue`: normalized issue metadata
+- `.Issue.Comments`: non-Workpad issue comments for additional human instructions and context
 - `.Turn`: current turn number
 
 Minimal GitHub Projects example:
@@ -167,6 +168,13 @@ URL: {{ .Issue.URL }}
 Repository: {{ .Issue.RepositoryNameWithOwner }}
 
 {{ .Issue.Description }}
+
+{{ if .Issue.Comments }}Issue comments:
+{{ range .Issue.Comments }}
+- {{ .Author }} {{ .URL }}
+{{ .Body }}
+{{ end }}
+{{ end }}
 
 Instructions:
 

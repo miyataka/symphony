@@ -22,6 +22,23 @@ func TestRenderPrompt(t *testing.T) {
 	}
 }
 
+func TestRenderPromptCanRenderIssueComments(t *testing.T) {
+	prompt, err := renderPrompt(`{{ range .Issue.Comments }}{{ .Author }}: {{ .Body }} {{ .URL }}{{ end }}`, tracker.Issue{
+		Identifier: "repo#1",
+		Comments: []tracker.IssueComment{{
+			Author: "miyataka",
+			Body:   "please read the linked PR comment",
+			URL:    "https://github.com/miyataka/symphony/issues/1#issuecomment-1",
+		}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "miyataka: please read the linked PR comment") {
+		t.Fatalf("unexpected prompt: %q", prompt)
+	}
+}
+
 func TestRenderPromptUsesStrictVariables(t *testing.T) {
 	_, err := renderPrompt("Issue {{ .Missing.TicketID }}", tracker.Issue{Identifier: "repo#1"}, 1)
 	if err == nil {

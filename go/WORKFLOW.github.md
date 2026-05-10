@@ -95,6 +95,13 @@ Repository: {{ .Issue.RepositoryNameWithOwner }}
 Description:
 {{ .Issue.Description }}
 
+{{ if .Issue.Comments }}Issue comments:
+{{ range .Issue.Comments }}
+- {{ .Author }} {{ .URL }}
+{{ .Body }}
+{{ end }}
+{{ end }}
+
 Instructions:
 
 1. Work only inside the current workspace.

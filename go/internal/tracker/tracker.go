@@ -12,6 +12,7 @@ type Issue struct {
 	Identifier              string
 	Title                   string
 	Description             string
+	Comments                []IssueComment
 	Priority                *int
 	State                   string
 	BranchName              string
@@ -24,6 +25,14 @@ type Issue struct {
 	PullRequests            []PullRequest
 	CreatedAt               *time.Time
 	UpdatedAt               *time.Time
+}
+
+type IssueComment struct {
+	ID        string
+	Author    string
+	Body      string
+	URL       string
+	CreatedAt *time.Time
 }
 
 type Blocker struct {

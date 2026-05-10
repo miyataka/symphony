@@ -55,6 +55,9 @@ func TestGitHubWorkflowKeepsRuntimeFilesOutOfAgentCommits(t *testing.T) {
 	if !strings.Contains(workflow, "Do not run `git commit`, `git push`, `gh pr create`, or `gh pr edit`") {
 		t.Fatal("expected GitHub workflow to reserve publishing for hooks")
 	}
+	if !strings.Contains(workflow, "{{ range .Issue.Comments }}") {
+		t.Fatal("expected GitHub workflow to include issue comments in agent prompt")
+	}
 }
 
 func TestParseWorkflowAcceptsUnterminatedFrontMatter(t *testing.T) {
