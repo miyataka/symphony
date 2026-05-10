@@ -38,7 +38,7 @@ polling:
   interval_ms: 30000
 pull_request:
   auto_merge: false
-  merge_method: SQUASH
+  merge_method: MERGE
   require_approval: true
   require_passing_checks: true
   required_check_names: []

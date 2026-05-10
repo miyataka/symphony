@@ -316,7 +316,7 @@ func TestApplyReviewStatePolicyAutoMergesReadyPR(t *testing.T) {
 	if recorder.mergedPRID != "PR_1" {
 		t.Fatalf("unexpected merged pr id: %q", recorder.mergedPRID)
 	}
-	if recorder.mergeMethod != "SQUASH" {
+	if recorder.mergeMethod != "MERGE" {
 		t.Fatalf("unexpected merge method: %q", recorder.mergeMethod)
 	}
 	if recorder.workpad == "" {
