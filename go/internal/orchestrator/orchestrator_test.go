@@ -187,6 +187,40 @@ func TestApplyReviewStatePolicyMovesHumanReviewToMergingWhenPRReady(t *testing.T
 	}
 }
 
+func TestApplyReviewStatePolicyMovesHumanReviewToReworkWhenRequiredChecksFail(t *testing.T) {
+	recorder := &recordingTracker{}
+	cfg := testConfig()
+	cfg.PullRequest.RequiredCheckNames = []string{"go", "e2e"}
+	service := New(Options{
+		Config:  cfg,
+		Tracker: recorder,
+	})
+	handled := service.applyReviewStatePolicy(context.Background(), tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "Human Review",
+		PullRequests: []tracker.PullRequest{{
+			State:                  "OPEN",
+			ReviewDecision:         "APPROVED",
+			StatusCheckRollupState: "FAILURE",
+			Checks: []tracker.StatusCheck{
+				{Name: "go", State: "SUCCESS"},
+				{Name: "e2e", State: "FAILURE"},
+			},
+		}},
+	})
+	if !handled {
+		t.Fatal("expected policy to handle failing required checks")
+	}
+	if recorder.updatedState != "Rework" {
+		t.Fatalf("unexpected updated state: %q", recorder.updatedState)
+	}
+	if !strings.Contains(recorder.workpad, "e2e=FAILURE") {
+		t.Fatalf("expected workpad to include failing check detail, got: %q", recorder.workpad)
+	}
+}
+
 func TestApplyReviewStatePolicyDoesNotMoveHumanReviewWhenReadyPRIsDraft(t *testing.T) {
 	recorder := &recordingTracker{}
 	service := New(Options{
