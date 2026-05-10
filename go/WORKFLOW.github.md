@@ -72,11 +72,16 @@ hooks:
     git commit -m "$SYMPHONY_ISSUE_IDENTIFIER: agent update"
     git push -u origin "$SYMPHONY_BRANCH"
     issue_number="${SYMPHONY_ISSUE_IDENTIFIER##*#}"
+    body_file="$(mktemp)"
+    cat >"$body_file" <<EOF
+    Automated work for $SYMPHONY_ISSUE_URL
+
+    Closes #$issue_number
+    EOF
     gh pr view "$SYMPHONY_BRANCH" --repo "$SYMPHONY_REPOSITORY" >/dev/null 2>&1 || \
       gh pr create --repo "$SYMPHONY_REPOSITORY" --head "$SYMPHONY_BRANCH" \
-        --title "$SYMPHONY_ISSUE_TITLE" --body "Automated work for $SYMPHONY_ISSUE_URL
-
-Closes #$issue_number"
+        --title "$SYMPHONY_ISSUE_TITLE" --body-file "$body_file"
+    rm -f "$body_file"
 agent:
   kind: claude-code
   max_concurrent_agents: 4
