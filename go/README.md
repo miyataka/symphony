@@ -67,7 +67,7 @@ Symphony selects per-agent defaults from `agent.kind` in the workflow front matt
 
 | `agent.kind`         | Default `agent.command`                                                  | Default `tracker.workpad_marker` |
 |----------------------|--------------------------------------------------------------------------|----------------------------------|
-| `codex` (or omitted) | (none — must be set explicitly)                                          | `## Codex Workpad`               |
+| `codex` (or omitted) | `mkdir -p .tmp && TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp" codex exec --sandbox workspace-write --skip-git-repo-check < "$SYMPHONY_PROMPT_FILE"` | `## Codex Workpad`               |
 | `claude-code`        | `cat "$SYMPHONY_PROMPT_FILE" \| claude -p --dangerously-skip-permissions` | `## Claude Workpad`              |
 
 Both `agent.command` and `tracker.workpad_marker` can be overridden per workflow. `agent.kind` is normalized to lower case and an unknown value is rejected at workflow load time.
