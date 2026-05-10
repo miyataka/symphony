@@ -132,6 +132,7 @@ tracker:
   done_state: Done
   workpad_marker: "## Codex Workpad"
   read_issue_dependencies: true
+  backlog_states: [Backlog]
   active_states: [Todo, In Progress, Rework]
   monitor_states: [Human Review, Merging]
   terminal_states: [Done, Closed, Cancelled, Canceled, Duplicate]
@@ -235,6 +236,20 @@ When the tracker supports writeback, Symphony updates the configured `status_fie
 Symphony watch `Human Review` for requested changes and `Merging` for completed PRs without
 starting another run while review or merge is still pending.
 
+`tracker.backlog_states` are Project Status options that Symphony recognises as captured but
+not-yet-dispatchable work. Items in a backlog state are excluded from agent dispatch so they will
+not run until a human moves them into an active state. Use them as a holding area before work is
+ready for Symphony:
+
+- `Backlog`: accepted but not dispatchable yet — Symphony will not pick the issue up.
+- `Todo`: ready for Symphony dispatch — the orchestrator may move it into `tracker.start_state`
+  and run an agent once concurrency and repository filters allow.
+
+Backlog states only influence the `setup-github-project` output (so the Project Status field is
+created with a `Backlog` option). They are not used for dispatch, writeback, or workspace
+lifecycle. To make backlog items eligible for agent runs, move them to `Todo` (or another
+`active_states` entry) instead of adding `Backlog` to `tracker.active_states`.
+
 It also creates or updates one issue comment containing `tracker.workpad_marker`, defaulting to
 `## Codex Workpad`. This comment is the handoff surface for workspace path, status, and execution
 notes.
@@ -292,3 +307,5 @@ make all
 
 - The Codex app-server JSON-RPC protocol is not implemented yet. Use `agent.command` as the bridge
   to Codex or another coding agent.
+- `WORKFLOW.md` is read once at startup; SPEC §6.2 dynamic reload is not implemented yet. See
+  [`docs/hot_reload.md`](docs/hot_reload.md) for the proposed conformance path.

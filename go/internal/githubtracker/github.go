@@ -1157,7 +1157,7 @@ var organizationProjectQuery = fmt.Sprintf(`
 query SymphonyGitHubProject($login: String!, $number: Int!, $after: String) {
   organization(login: $login) {
     projectV2(number: $number) {
-      items(first: 50, after: $after) {
+      items(first: 25, after: $after) {
         nodes { %s }
         pageInfo { hasNextPage endCursor }
       }
@@ -1169,7 +1169,7 @@ var userProjectQuery = fmt.Sprintf(`
 query SymphonyGitHubUserProject($login: String!, $number: Int!, $after: String) {
   user(login: $login) {
     projectV2(number: $number) {
-      items(first: 50, after: $after) {
+      items(first: 25, after: $after) {
         nodes { %s }
         pageInfo { hasNextPage endCursor }
       }

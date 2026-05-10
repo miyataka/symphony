@@ -46,6 +46,7 @@ type TrackerConfig struct {
 	DoneState             string   `yaml:"done_state"`
 	WorkpadMarker         string   `yaml:"workpad_marker"`
 	ReadIssueDependencies bool     `yaml:"read_issue_dependencies"`
+	BacklogStates         []string `yaml:"backlog_states"`
 	ActiveStates          []string `yaml:"active_states"`
 	MonitorStates         []string `yaml:"monitor_states"`
 	TerminalStates        []string `yaml:"terminal_states"`
@@ -187,6 +188,7 @@ func defaultConfig() Config {
 			MergingState:          "Merging",
 			DoneState:             "Done",
 			ReadIssueDependencies: true,
+			BacklogStates:         []string{"Backlog"},
 			ActiveStates:          []string{"Todo", "In Progress", "Rework"},
 			MonitorStates:         []string{"Human Review", "Merging"},
 			TerminalStates:        []string{"Done", "Closed", "Cancelled", "Canceled", "Duplicate"},

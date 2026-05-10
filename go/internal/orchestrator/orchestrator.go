@@ -140,6 +140,10 @@ func (s *Service) applyReviewStatePolicy(ctx context.Context, issue tracker.Issu
 			s.moveIssueWithWorkpad(ctx, issue, s.cfg.Tracker.ReworkState, "Linked PR has actionable review feedback.")
 			return true
 		}
+		if s.issueHasFailingPRChecks(issue) {
+			s.moveIssueWithWorkpad(ctx, issue, s.cfg.Tracker.ReworkState, "Linked PR has failing checks.")
+			return true
+		}
 		if s.issueHasReadyPR(issue) {
 			s.moveIssueWithWorkpad(ctx, issue, s.cfg.Tracker.MergingState, "Linked PR is approved and checks are passing.")
 			return true
@@ -675,6 +679,15 @@ func (s *Service) issueNeedsPRRework(issue tracker.Issue) bool {
 	return false
 }
 
+func (s *Service) issueHasFailingPRChecks(issue tracker.Issue) bool {
+	for _, pr := range issue.PullRequests {
+		if pr.RequiredChecksFailing(s.cfg.PullRequest.RequiredCheckNames) {
+			return true
+		}
+	}
+	return false
+}
+
 func issueHasMergedPR(issue tracker.Issue) bool {
 	for _, pr := range issue.PullRequests {
 		if pr.IsMerged() {
@@ -743,6 +756,13 @@ func (s *Service) workpadBody(issue tracker.Issue, status, workspacePath, note s
 			}
 			if pr.StatusCheckRollupState != "" {
 				summary += " checks=" + pr.StatusCheckRollupState
+			}
+			if len(pr.Checks) > 0 {
+				checks := make([]string, 0, len(pr.Checks))
+				for _, check := range pr.Checks {
+					checks = append(checks, check.Name+"="+check.State)
+				}
+				summary += " check_details=[" + strings.Join(checks, ",") + "]"
 			}
 			if pr.UnresolvedThreadCount > 0 {
 				summary += fmt.Sprintf(" unresolved_threads=%d", pr.UnresolvedThreadCount)

@@ -58,6 +58,16 @@ func TestGitHubWorkflowKeepsRuntimeFilesOutOfAgentCommits(t *testing.T) {
 	if !strings.Contains(workflow, "{{ range .Issue.Comments }}") {
 		t.Fatal("expected GitHub workflow to include issue comments in agent prompt")
 	}
+	if !strings.Contains(workflow, "{{ range .Issue.PullRequests }}") {
+		t.Fatal("expected GitHub workflow to include linked pull requests in agent prompt")
+	}
+	if !strings.Contains(workflow, "{{ range .Checks }}") {
+		t.Fatal("expected GitHub workflow to include pull request check statuses in agent prompt")
+	}
+	if !strings.Contains(workflow, `issue_number="${SYMPHONY_ISSUE_IDENTIFIER##*#}"`) ||
+		!strings.Contains(workflow, `Closes #$issue_number`) {
+		t.Fatal("expected GitHub workflow to create PRs with a closing issue reference")
+	}
 	if !strings.Contains(workflow, "{{ range .Issue.PRReviewComments }}") {
 		t.Fatal("expected GitHub workflow to include unresolved PR review comments in agent prompt")
 	}
@@ -124,6 +134,16 @@ func TestParseConfigResolvesEnvAndDefaults(t *testing.T) {
 	}
 	if len(cfg.Tracker.ActiveStates) != 3 || cfg.Tracker.ActiveStates[2] != "Rework" {
 		t.Fatalf("unexpected active states: %#v", cfg.Tracker.ActiveStates)
+	}
+	if len(cfg.Tracker.BacklogStates) != 1 || cfg.Tracker.BacklogStates[0] != "Backlog" {
+		t.Fatalf("unexpected backlog states: %#v", cfg.Tracker.BacklogStates)
+	}
+	for _, state := range cfg.Tracker.BacklogStates {
+		for _, active := range cfg.Tracker.ActiveStates {
+			if state == active {
+				t.Fatalf("backlog state %q must not be dispatchable via active_states", state)
+			}
+		}
 	}
 	if len(cfg.Tracker.MonitorStates) != 2 ||
 		cfg.Tracker.MonitorStates[0] != "Human Review" ||
