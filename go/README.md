@@ -47,18 +47,36 @@ Project scan summary for setup troubleshooting, including the configured owner/p
 states, total Project items, matched issues, and counts/examples for skipped items such as non-Issue
 items, missing Status values, state mismatches, assignee mismatches, and repository mismatches.
 
-To keep a local log file:
+Runtime events that are emitted include dispatch decisions, retry/backoff scheduling, GitHub
+Project status transitions, workspace cleanup, pull request merge attempts, and per-issue run
+completion. Each event carries the issue identifier, state, and (where relevant) PR number, retry
+count, and error so a tail/grep over the log file is enough to follow what Symphony is doing.
+
+To persist logs to a file that another shell can `tail -f` or `rg` while Symphony runs, set
+`observability.log_file` in the workflow front matter:
+
+```yaml
+observability:
+  log_json: true
+  log_level: info
+  log_file: ~/symphony-logs/runtime.log
+```
+
+When `log_file` is set, Symphony appends structured events to the file *and* mirrors them to
+stdout. The path supports `~/` and `$ENV` expansion, and any missing parent directories are
+created at startup. The file is opened in append mode so restarts preserve prior history.
+
+Without `log_file`, you can still capture stdout from another session via `tee`:
 
 ```bash
 go run ./cmd/symphony ./WORKFLOW.github.md 2>&1 | tee symphony.log
 ```
 
-Use JSON logs or enable debug logging by adding this to the workflow front matter:
+Then in another shell:
 
-```yaml
-observability:
-  log_json: true
-  log_level: debug
+```bash
+tail -f ~/symphony-logs/runtime.log
+rg 'failed|retry|backoff|panic' ~/symphony-logs/runtime.log
 ```
 
 ## Agent kinds

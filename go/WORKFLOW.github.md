@@ -36,6 +36,11 @@ tracker:
     - Duplicate
 polling:
   interval_ms: 30000
+observability:
+  log_json: true
+  log_level: info
+  # Persist runtime logs so another shell can `tail -f` or `rg` them.
+  log_file: ~/symphony-logs/symphony.log
 pull_request:
   auto_merge: false
   merge_method: MERGE
