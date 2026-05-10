@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -219,6 +221,73 @@ func TestFetchIssuesByStatesNormalizesLinkedPullRequests(t *testing.T) {
 	if len(pr.Checks) != 2 || pr.Checks[0].Name != "go" || pr.Checks[0].State != "FAILURE" || pr.Checks[1].Name != "lint" {
 		t.Fatalf("unexpected checks: %#v", pr.Checks)
 	}
+}
+
+func TestFetchIssuesProjectQueryStaysUnderGitHubNestedNodeLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Query == "" {
+			t.Fatal("expected GraphQL query")
+		}
+		budget := graphqlFirstArgument(t, payload.Query, `items\s*\(\s*first:\s*(\d+)`) *
+			graphqlFirstArgument(t, payload.Query, `closedByPullRequestsReferences\s*\(\s*first:\s*(\d+)`) *
+			graphqlFirstArgument(t, payload.Query, `reviewThreads\s*\(\s*first:\s*(\d+)`) *
+			graphqlFirstArgument(t, payload.Query, `comments\s*\(\s*first:\s*(\d+)\s*\)\s*\{\s*nodes\s*\{\s*id\s+body\s+url\s+createdAt\s+author\s*\{\s*__typename\s+login\s*\}`)
+		if budget > 500000 {
+			t.Fatalf("nested review-thread comments can request %d possible nodes, exceeding GitHub's 500000 limit", budget)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data": {
+				"user": {
+					"projectV2": {
+						"items": {
+							"nodes": [],
+							"pageInfo": {"hasNextPage": false, "endCursor": null}
+						}
+					}
+				}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := New(workflow.TrackerConfig{
+		Token:          "token",
+		Endpoint:       server.URL,
+		Owner:          "miyataka",
+		OwnerType:      "user",
+		ProjectNumber:  1,
+		StatusField:    "Status",
+		ActiveStates:   []string{"Todo"},
+		TerminalStates: []string{"Done"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.FetchCandidateIssues(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func graphqlFirstArgument(t *testing.T, query, pattern string) int {
+	t.Helper()
+	re := regexp.MustCompile(pattern)
+	matches := re.FindStringSubmatch(query)
+	if len(matches) != 2 {
+		t.Fatalf("query did not match %q:\n%s", pattern, query)
+	}
+	n, err := strconv.Atoi(matches[1])
+	if err != nil {
+		t.Fatalf("invalid first argument %q: %v", matches[1], err)
+	}
+	return n
 }
 
 func TestFetchIssuesByStatesNormalizesIssueComments(t *testing.T) {
