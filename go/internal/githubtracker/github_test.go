@@ -221,6 +221,102 @@ func TestFetchIssuesByStatesNormalizesLinkedPullRequests(t *testing.T) {
 	}
 }
 
+func TestFetchIssuesByStatesNormalizesIssueComments(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data": {
+				"user": {
+					"projectV2": {
+						"items": {
+							"nodes": [{
+								"id": "PVTI_1",
+								"content": {
+									"__typename": "Issue",
+									"id": "I_1",
+									"number": 42,
+									"title": "Implement thing",
+									"body": "Body text",
+									"url": "https://github.com/miyataka/symphony/issues/42",
+									"state": "OPEN",
+									"repository": {
+										"nameWithOwner": "miyataka/symphony",
+										"url": "https://github.com/miyataka/symphony"
+									},
+									"labels": {"nodes": []},
+									"assignees": {"nodes": []},
+									"comments": {
+										"nodes": [
+											{
+												"id": "IC_1",
+												"body": "## Claude Workpad\n\nruntime note",
+												"url": "https://github.com/miyataka/symphony/issues/42#issuecomment-1",
+												"createdAt": "2026-05-01T00:02:00Z",
+												"author": {"login": "miyataka"}
+											},
+											{
+												"id": "IC_2",
+												"body": "frontendにe2eテストの仕組みが追加されたので，それをつかって品質保証してください．",
+												"url": "https://github.com/miyataka/symphony/issues/42#issuecomment-2",
+												"createdAt": "2026-05-01T00:03:00Z",
+												"author": {"login": "reviewer"}
+											}
+										]
+									}
+								},
+								"fieldValues": {
+									"nodes": [{"__typename": "ProjectV2ItemFieldSingleSelectValue", "name": "Todo", "field": {"name": "Status"}}]
+								}
+							}],
+							"pageInfo": {"hasNextPage": false, "endCursor": null}
+						}
+					}
+				}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := New(workflow.TrackerConfig{
+		Token:          "token",
+		Endpoint:       server.URL,
+		Owner:          "miyataka",
+		OwnerType:      "user",
+		ProjectNumber:  1,
+		StatusField:    "Status",
+		WorkpadMarker:  "## Claude Workpad",
+		ActiveStates:   []string{"Todo"},
+		TerminalStates: []string{"Done"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues, err := client.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected one issue, got %d", len(issues))
+	}
+	comments := issues[0].Comments
+	if len(comments) != 1 {
+		t.Fatalf("expected one non-workpad comment, got %#v", comments)
+	}
+	comment := comments[0]
+	if comment.ID != "IC_2" || comment.Author != "reviewer" {
+		t.Fatalf("unexpected comment metadata: %#v", comment)
+	}
+	if !strings.Contains(comment.Body, "e2eテスト") {
+		t.Fatalf("unexpected comment body: %#v", comment)
+	}
+	if comment.URL != "https://github.com/miyataka/symphony/issues/42#issuecomment-2" {
+		t.Fatalf("unexpected comment url: %#v", comment)
+	}
+	if comment.CreatedAt == nil || comment.CreatedAt.Format("2006-01-02T15:04:05Z") != "2026-05-01T00:03:00Z" {
+		t.Fatalf("unexpected comment timestamp: %#v", comment.CreatedAt)
+	}
+}
+
 func TestMergePullRequest(t *testing.T) {
 	var sawMutation bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

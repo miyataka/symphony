@@ -404,6 +404,7 @@ func (c *Client) normalizeItem(item projectItem) (tracker.Issue, string, bool) {
 		Identifier:              item.Content.Identifier(),
 		Title:                   item.Content.Title,
 		Description:             item.Content.Body,
+		Comments:                item.Content.IssueComments(c.cfg.WorkpadMarker),
 		Priority:                priority,
 		State:                   state,
 		BranchName:              item.Content.BranchName(),
@@ -725,9 +726,22 @@ type issueContent struct {
 			Login string `json:"login"`
 		} `json:"nodes"`
 	} `json:"assignees"`
+	Comments struct {
+		Nodes []issueCommentContent `json:"nodes"`
+	} `json:"comments"`
 	ClosedByPullRequestsReferences struct {
 		Nodes []pullRequestContent `json:"nodes"`
 	} `json:"closedByPullRequestsReferences"`
+}
+
+type issueCommentContent struct {
+	ID        string `json:"id"`
+	Body      string `json:"body"`
+	URL       string `json:"url"`
+	CreatedAt string `json:"createdAt"`
+	Author    struct {
+		Login string `json:"login"`
+	} `json:"author"`
 }
 
 type pullRequestContent struct {
@@ -845,6 +859,56 @@ func (i issueContent) PullRequests() []tracker.PullRequest {
 	return out
 }
 
+func (i issueContent) IssueComments(workpadMarker string) []tracker.IssueComment {
+	markers := workpadMarkers(workpadMarker)
+	out := make([]tracker.IssueComment, 0, len(i.Comments.Nodes))
+	for _, comment := range i.Comments.Nodes {
+		body := strings.TrimSpace(comment.Body)
+		if body == "" || containsAnyMarker(body, markers) {
+			continue
+		}
+		out = append(out, tracker.IssueComment{
+			ID:        comment.ID,
+			Author:    comment.Author.Login,
+			Body:      body,
+			URL:       comment.URL,
+			CreatedAt: parseTimePtr(comment.CreatedAt),
+		})
+	}
+	return out
+}
+
+func workpadMarkers(configured string) []string {
+	candidates := []string{
+		strings.TrimSpace(configured),
+		"## Codex Workpad",
+		"## Claude Workpad",
+	}
+	out := make([]string, 0, len(candidates))
+	seen := map[string]struct{}{}
+	for _, marker := range candidates {
+		if marker == "" {
+			continue
+		}
+		normalized := normalize(marker)
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, marker)
+	}
+	return out
+}
+
+func containsAnyMarker(body string, markers []string) bool {
+	for _, marker := range markers {
+		if strings.Contains(body, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func (i issueContent) BranchName() string {
 	if i.Repository.NameWithOwner == "" || i.Number == 0 {
 		return ""
@@ -959,6 +1023,15 @@ content {
     repository { nameWithOwner sshUrl url }
     labels(first: 25) { nodes { name } }
     assignees(first: 25) { nodes { login } }
+    comments(first: 50) {
+      nodes {
+        id
+        body
+        url
+        createdAt
+        author { login }
+      }
+    }
     closedByPullRequestsReferences(first: 10) {
       nodes {
         id
