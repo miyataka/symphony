@@ -67,12 +67,25 @@ Symphony selects per-agent defaults from `agent.kind` in the workflow front matt
 
 | `agent.kind`         | Default `agent.command`                                                  | Default `tracker.workpad_marker` |
 |----------------------|--------------------------------------------------------------------------|----------------------------------|
-| `codex` (or omitted) | (none — must be set explicitly)                                          | `## Codex Workpad`               |
+| `codex` (or omitted) | `mkdir -p .tmp && ... codex exec --sandbox workspace-write ...`          | `## Codex Workpad`               |
 | `claude-code`        | `cat "$SYMPHONY_PROMPT_FILE" \| claude -p --dangerously-skip-permissions` | `## Claude Workpad`              |
 
 Both `agent.command` and `tracker.workpad_marker` can be overridden per workflow. `agent.kind` is normalized to lower case and an unknown value is rejected at workflow load time.
 
+`codex` requires the Codex CLI installed and authenticated on `PATH`. Its default command creates a
+workspace-local `.tmp` directory, points temp environment variables at it, and feeds
+`$SYMPHONY_PROMPT_FILE` into `codex exec --sandbox workspace-write --skip-git-repo-check`.
+
 `claude-code` requires the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and on `PATH`. The default command runs Claude Code with `--dangerously-skip-permissions` because Symphony already isolates each issue inside a per-issue workspace; if you need stricter sandboxing, set `agent.command` explicitly.
+
+Minimal `codex` example:
+
+```yaml
+agent:
+  kind: codex
+  max_concurrent_agents: 4
+  max_turns: 20
+```
 
 Minimal `claude-code` example:
 
@@ -154,12 +167,9 @@ hooks:
       gh pr create --repo "$SYMPHONY_REPOSITORY" --head "$SYMPHONY_BRANCH" \
         --title "$SYMPHONY_ISSUE_TITLE" --body "Automated work for $SYMPHONY_ISSUE_URL"
 agent:
+  kind: codex
   max_concurrent_agents: 4
   max_turns: 20
-  command: |
-    mkdir -p .tmp
-    TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp" \
-      codex exec --sandbox workspace-write --skip-git-repo-check < "$SYMPHONY_PROMPT_FILE"
 ---
 
 You are working on GitHub issue {{ .Issue.Identifier }}.

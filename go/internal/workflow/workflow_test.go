@@ -393,7 +393,7 @@ func TestParseConfigPreservesExplicitClaudeCodeCommand(t *testing.T) {
 	}
 }
 
-func TestParseConfigCodexLeavesCommandEmpty(t *testing.T) {
+func TestParseConfigDefaultsCodexCommand(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-token")
 	cfg, err := ParseConfig(map[string]any{
 		"tracker": map[string]any{
@@ -404,7 +404,9 @@ func TestParseConfigCodexLeavesCommandEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Agent.Command != "" {
-		t.Fatalf("expected codex default to leave command empty, got %q", cfg.Agent.Command)
+	expected := `mkdir -p .tmp
+TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp" codex exec --sandbox workspace-write --skip-git-repo-check < "$SYMPHONY_PROMPT_FILE"`
+	if cfg.Agent.Command != expected {
+		t.Fatalf("expected default codex command\n  want: %q\n  got:  %q", expected, cfg.Agent.Command)
 	}
 }
