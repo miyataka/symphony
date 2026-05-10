@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"strings"
+	"testing"
+
+	"github.com/miyataka/symphony/go/internal/workflow"
+)
 
 func TestParseCommandDefaultsToRun(t *testing.T) {
 	command, args, help := parseCommand(nil)
@@ -69,5 +75,31 @@ func TestParseWorkflowPathRejectsMultiplePositionals(t *testing.T) {
 	_, err := parseWorkflowPath("run", []string{"one.md", "two.md"})
 	if err == nil {
 		t.Fatal("expected multiple positional workflow path error")
+	}
+}
+
+func TestPrintGitHubProjectSetupIncludesBacklogBeforeTodo(t *testing.T) {
+	cfg := workflow.Config{
+		Tracker: workflow.TrackerConfig{
+			Owner:          "miyataka",
+			OwnerType:      "user",
+			ProjectNumber:  2,
+			StatusField:    "Status",
+			BacklogStates:  []string{"Backlog"},
+			ActiveStates:   []string{"Todo", "In Progress", "Rework"},
+			MonitorStates:  []string{"Human Review", "Merging"},
+			TerminalStates: []string{"Done", "Closed", "Cancelled", "Canceled", "Duplicate"},
+		},
+	}
+
+	var buf bytes.Buffer
+	printGitHubProjectSetup(&buf, cfg)
+	out := buf.String()
+
+	if !strings.Contains(out, "Backlog,Todo,In Progress,Rework,Human Review,Merging,Done,Closed,Cancelled,Canceled,Duplicate") {
+		t.Fatalf("expected Backlog to lead the single-select options list, got:\n%s", out)
+	}
+	if backlogIdx, todoIdx := strings.Index(out, "Backlog"), strings.Index(out, "Todo"); backlogIdx == -1 || todoIdx == -1 || backlogIdx >= todoIdx {
+		t.Fatalf("expected Backlog before Todo in output, got:\n%s", out)
 	}
 }

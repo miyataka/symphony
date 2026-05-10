@@ -125,6 +125,16 @@ func TestParseConfigResolvesEnvAndDefaults(t *testing.T) {
 	if len(cfg.Tracker.ActiveStates) != 3 || cfg.Tracker.ActiveStates[2] != "Rework" {
 		t.Fatalf("unexpected active states: %#v", cfg.Tracker.ActiveStates)
 	}
+	if len(cfg.Tracker.BacklogStates) != 1 || cfg.Tracker.BacklogStates[0] != "Backlog" {
+		t.Fatalf("unexpected backlog states: %#v", cfg.Tracker.BacklogStates)
+	}
+	for _, state := range cfg.Tracker.BacklogStates {
+		for _, active := range cfg.Tracker.ActiveStates {
+			if state == active {
+				t.Fatalf("backlog state %q must not be dispatchable via active_states", state)
+			}
+		}
+	}
 	if len(cfg.Tracker.MonitorStates) != 2 ||
 		cfg.Tracker.MonitorStates[0] != "Human Review" ||
 		cfg.Tracker.MonitorStates[1] != "Merging" {

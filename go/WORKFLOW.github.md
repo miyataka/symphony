@@ -21,6 +21,8 @@ tracker:
   done_state: Done
   workpad_marker: "## Codex Workpad"
   read_issue_dependencies: true
+  backlog_states:
+    - Backlog
   active_states:
     - Todo
     - In Progress

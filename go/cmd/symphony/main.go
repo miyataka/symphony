@@ -100,7 +100,7 @@ func setupGitHubProject(args []string) {
 		fmt.Fprintf(os.Stderr, "failed to load workflow %q: %v\n", workflowPath, err)
 		os.Exit(1)
 	}
-	printGitHubProjectSetup(cfg)
+	printGitHubProjectSetup(os.Stdout, cfg)
 }
 
 func parseCommand(args []string) (string, []string, bool) {
@@ -188,32 +188,33 @@ func loadWorkflowForSetup(path string) (workflow.Config, error) {
 	return workflow.ParseConfig(raw)
 }
 
-func printGitHubProjectSetup(cfg workflow.Config) {
+func printGitHubProjectSetup(w io.Writer, cfg workflow.Config) {
 	owner := cfg.Tracker.Owner
 	if cfg.Tracker.OwnerType == "user" && owner == "@me" {
 		owner = "@me"
 	}
-	states := append([]string{}, cfg.Tracker.ActiveStates...)
+	states := append([]string{}, cfg.Tracker.BacklogStates...)
+	states = append(states, cfg.Tracker.ActiveStates...)
 	states = append(states, cfg.Tracker.MonitorStates...)
 	states = append(states, cfg.Tracker.TerminalStates...)
 	states = uniqueStrings(states)
 
-	fmt.Println("# GitHub Project setup")
-	fmt.Println("gh auth refresh -s project")
-	fmt.Printf("gh project view %d --owner %q --format json\n", cfg.Tracker.ProjectNumber, owner)
-	fmt.Printf("gh project field-list %d --owner %q\n", cfg.Tracker.ProjectNumber, owner)
-	fmt.Println()
-	fmt.Println("# If the Status field does not exist, create it with the configured workflow states:")
-	fmt.Printf("gh project field-create %d --owner %q --name %q --data-type SINGLE_SELECT --single-select-options %q\n",
+	fmt.Fprintln(w, "# GitHub Project setup")
+	fmt.Fprintln(w, "gh auth refresh -s project")
+	fmt.Fprintf(w, "gh project view %d --owner %q --format json\n", cfg.Tracker.ProjectNumber, owner)
+	fmt.Fprintf(w, "gh project field-list %d --owner %q\n", cfg.Tracker.ProjectNumber, owner)
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "# If the Status field does not exist, create it with the configured workflow states:")
+	fmt.Fprintf(w, "gh project field-create %d --owner %q --name %q --data-type SINGLE_SELECT --single-select-options %q\n",
 		cfg.Tracker.ProjectNumber,
 		owner,
 		cfg.Tracker.StatusField,
 		strings.Join(states, ","),
 	)
 	if cfg.Tracker.PriorityField != "" {
-		fmt.Println()
-		fmt.Println("# Optional priority field:")
-		fmt.Printf("gh project field-create %d --owner %q --name %q --data-type SINGLE_SELECT --single-select-options %q\n",
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "# Optional priority field:")
+		fmt.Fprintf(w, "gh project field-create %d --owner %q --name %q --data-type SINGLE_SELECT --single-select-options %q\n",
 			cfg.Tracker.ProjectNumber,
 			owner,
 			cfg.Tracker.PriorityField,
@@ -221,10 +222,10 @@ func printGitHubProjectSetup(cfg workflow.Config) {
 		)
 	}
 	if len(cfg.Tracker.AllowedRepositories) > 0 {
-		fmt.Println()
-		fmt.Println("# Add issues from the allowed repositories as project items when needed:")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "# Add issues from the allowed repositories as project items when needed:")
 		for _, repo := range cfg.Tracker.AllowedRepositories {
-			fmt.Printf("# gh issue list --repo %s --state open --json url --jq '.[].url' | xargs -I{} gh project item-add %d --owner %q --url {}\n", repo, cfg.Tracker.ProjectNumber, owner)
+			fmt.Fprintf(w, "# gh issue list --repo %s --state open --json url --jq '.[].url' | xargs -I{} gh project item-add %d --owner %q --url {}\n", repo, cfg.Tracker.ProjectNumber, owner)
 		}
 	}
 }
