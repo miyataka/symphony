@@ -289,3 +289,5 @@ make all
 
 - The Codex app-server JSON-RPC protocol is not implemented yet. Use `agent.command` as the bridge
   to Codex or another coding agent.
+- `WORKFLOW.md` is read once at startup; SPEC §6.2 dynamic reload is not implemented yet. See
+  [`docs/hot_reload.md`](docs/hot_reload.md) for the proposed conformance path.
