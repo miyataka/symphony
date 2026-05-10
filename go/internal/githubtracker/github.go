@@ -489,7 +489,7 @@ func (c *Client) MergePullRequest(ctx context.Context, issue tracker.Issue, pr t
 	}
 	method := strings.ToUpper(strings.TrimSpace(opts.Method))
 	if method == "" {
-		method = "SQUASH"
+		method = "MERGE"
 	}
 	switch method {
 	case "MERGE", "SQUASH", "REBASE":

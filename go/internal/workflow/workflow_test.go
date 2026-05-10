@@ -130,7 +130,7 @@ func TestParseConfigResolvesEnvAndDefaults(t *testing.T) {
 		cfg.Tracker.MonitorStates[1] != "Merging" {
 		t.Fatalf("unexpected monitor states: %#v", cfg.Tracker.MonitorStates)
 	}
-	if cfg.PullRequest.MergeMethod != "SQUASH" || !cfg.PullRequest.RequireApproval || !cfg.PullRequest.RequirePassingChecks {
+	if cfg.PullRequest.MergeMethod != "MERGE" || !cfg.PullRequest.RequireApproval || !cfg.PullRequest.RequirePassingChecks {
 		t.Fatalf("unexpected pull request defaults: %#v", cfg.PullRequest)
 	}
 	if cfg.Observability.LogLevel != "info" {

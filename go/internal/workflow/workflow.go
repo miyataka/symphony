@@ -191,7 +191,7 @@ func defaultConfig() Config {
 			TerminalStates:        []string{"Done", "Closed", "Cancelled", "Canceled", "Duplicate"},
 		},
 		PullRequest: PullRequestConfig{
-			MergeMethod:          "SQUASH",
+			MergeMethod:          "MERGE",
 			RequireApproval:      true,
 			RequirePassingChecks: true,
 		},
@@ -271,7 +271,7 @@ func (c *Config) Resolve() error {
 	}
 	c.PullRequest.MergeMethod = strings.ToUpper(strings.TrimSpace(c.PullRequest.MergeMethod))
 	if c.PullRequest.MergeMethod == "" {
-		c.PullRequest.MergeMethod = "SQUASH"
+		c.PullRequest.MergeMethod = "MERGE"
 	}
 	switch c.PullRequest.MergeMethod {
 	case "MERGE", "SQUASH", "REBASE":
