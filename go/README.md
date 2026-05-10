@@ -89,6 +89,7 @@ Use YAML front matter plus a Go `text/template` prompt body. The prompt receives
 
 - `.Issue`: normalized issue metadata
 - `.Issue.Comments`: non-Workpad issue comments for additional human instructions and context
+- `.Issue.PRReviewComments`: unresolved review thread comments from linked pull requests (bot comments older than the latest commit are skipped)
 - `.Turn`: current turn number
 
 Minimal GitHub Projects example:
@@ -118,7 +119,7 @@ tracker:
   terminal_states: [Done, Closed, Cancelled, Canceled, Duplicate]
 pull_request:
   auto_merge: false
-  merge_method: SQUASH
+  merge_method: MERGE
   require_approval: true
   require_passing_checks: true
   required_check_names: []
@@ -172,6 +173,13 @@ Repository: {{ .Issue.RepositoryNameWithOwner }}
 {{ if .Issue.Comments }}Issue comments:
 {{ range .Issue.Comments }}
 - {{ .Author }} {{ .URL }}
+{{ .Body }}
+{{ end }}
+{{ end }}
+
+{{ if .Issue.PRReviewComments }}Unresolved PR review comments:
+{{ range .Issue.PRReviewComments }}
+- {{ .Author }}{{ if .AuthorIsBot }} (bot){{ end }} on PR #{{ .PRNumber }} {{ .Path }}{{ if .Line }}:{{ .Line }}{{ end }} {{ .URL }}
 {{ .Body }}
 {{ end }}
 {{ end }}

@@ -39,6 +39,31 @@ func TestRenderPromptCanRenderIssueComments(t *testing.T) {
 	}
 }
 
+func TestRenderPromptCanRenderPRReviewComments(t *testing.T) {
+	prompt, err := renderPrompt(
+		`{{ range .Issue.PRReviewComments }}{{ .Author }} on PR #{{ .PRNumber }} {{ .Path }}:{{ .Line }} {{ .URL }}: {{ .Body }}{{ end }}`,
+		tracker.Issue{
+			Identifier: "repo#1",
+			PRReviewComments: []tracker.PRReviewComment{{
+				Author:   "reviewer",
+				PRNumber: 17,
+				PRURL:    "https://github.com/miyataka/symphony/pull/17",
+				Path:     "go/orchestrator.go",
+				Line:     42,
+				URL:      "https://github.com/miyataka/symphony/pull/17#discussion_r1",
+				Body:     "needs early return",
+			}},
+		},
+		1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "reviewer on PR #17 go/orchestrator.go:42 https://github.com/miyataka/symphony/pull/17#discussion_r1: needs early return") {
+		t.Fatalf("unexpected prompt: %q", prompt)
+	}
+}
+
 func TestRenderPromptUsesStrictVariables(t *testing.T) {
 	_, err := renderPrompt("Issue {{ .Missing.TicketID }}", tracker.Issue{Identifier: "repo#1"}, 1)
 	if err == nil {
@@ -325,7 +350,7 @@ func TestApplyReviewStatePolicyAutoMergesReadyPR(t *testing.T) {
 	if recorder.mergedPRID != "PR_1" {
 		t.Fatalf("unexpected merged pr id: %q", recorder.mergedPRID)
 	}
-	if recorder.mergeMethod != "SQUASH" {
+	if recorder.mergeMethod != "MERGE" {
 		t.Fatalf("unexpected merge method: %q", recorder.mergeMethod)
 	}
 	if recorder.workpad == "" {

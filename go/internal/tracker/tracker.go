@@ -13,6 +13,7 @@ type Issue struct {
 	Title                   string
 	Description             string
 	Comments                []IssueComment
+	PRReviewComments        []PRReviewComment
 	Priority                *int
 	State                   string
 	BranchName              string
@@ -33,6 +34,19 @@ type IssueComment struct {
 	Body      string
 	URL       string
 	CreatedAt *time.Time
+}
+
+type PRReviewComment struct {
+	ID          string
+	PRNumber    int
+	PRURL       string
+	Path        string
+	Line        int
+	Author      string
+	AuthorIsBot bool
+	Body        string
+	URL         string
+	CreatedAt   *time.Time
 }
 
 type Blocker struct {
