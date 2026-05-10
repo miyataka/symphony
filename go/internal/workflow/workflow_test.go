@@ -58,6 +58,9 @@ func TestGitHubWorkflowKeepsRuntimeFilesOutOfAgentCommits(t *testing.T) {
 	if !strings.Contains(workflow, "{{ range .Issue.Comments }}") {
 		t.Fatal("expected GitHub workflow to include issue comments in agent prompt")
 	}
+	if !strings.Contains(workflow, "{{ range .Issue.PRReviewComments }}") {
+		t.Fatal("expected GitHub workflow to include unresolved PR review comments in agent prompt")
+	}
 }
 
 func TestParseWorkflowAcceptsUnterminatedFrontMatter(t *testing.T) {
