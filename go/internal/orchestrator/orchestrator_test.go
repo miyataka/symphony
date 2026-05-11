@@ -558,7 +558,7 @@ func TestCheckLoopingRunsWaitsForRuntimeAndTurns(t *testing.T) {
 	}
 }
 
-func TestRunIssuePropagatesAfterRunHookFailure(t *testing.T) {
+func TestRunIssueIgnoresAfterRunHookFailure(t *testing.T) {
 	cfg := testConfig()
 	cfg.Workspace.Root = t.TempDir()
 	cfg.Agent.Command = ""
@@ -574,11 +574,8 @@ func TestRunIssuePropagatesAfterRunHookFailure(t *testing.T) {
 		Title:      "Issue",
 		State:      "In Progress",
 	})
-	if err == nil {
-		t.Fatal("expected after_run failure")
-	}
-	if !strings.Contains(err.Error(), "after_run hook") {
-		t.Fatalf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatalf("expected after_run failure to be ignored, got: %v", err)
 	}
 }
 

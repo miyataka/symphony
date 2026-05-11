@@ -36,7 +36,7 @@ tracker:
     - Canceled
     - Duplicate
 polling:
-  interval_ms: 30000
+  interval_ms: 180000
 observability:
   log_json: true
   log_level: info

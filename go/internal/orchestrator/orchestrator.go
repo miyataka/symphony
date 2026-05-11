@@ -285,14 +285,10 @@ func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) error {
 			return fmt.Errorf("before_run hook: %w", err)
 		}
 		if err := s.runAgentTurn(ctx, path, issue, turn); err != nil {
-			if afterErr := workspace.RunAfter(ctx, path, s.cfg.Hooks, issue, s.cfg.HookTimeout()); afterErr != nil {
-				return errors.Join(err, fmt.Errorf("after_run hook: %w", afterErr))
-			}
+			s.runAfterBestEffort(ctx, path, issue)
 			return err
 		}
-		if err := workspace.RunAfter(ctx, path, s.cfg.Hooks, issue, s.cfg.HookTimeout()); err != nil {
-			return fmt.Errorf("after_run hook: %w", err)
-		}
+		s.runAfterBestEffort(ctx, path, issue)
 		s.recordCompletedTurn(issue.ID, turn)
 		s.upsertWorkpad(ctx, issue, s.workpadBody(issue, "Running", path, fmt.Sprintf("Completed turn %d.", turn)))
 
@@ -309,6 +305,12 @@ func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) error {
 		issue = refreshed
 	}
 	return nil
+}
+
+func (s *Service) runAfterBestEffort(ctx context.Context, path string, issue tracker.Issue) {
+	if err := workspace.RunAfter(ctx, path, s.cfg.Hooks, issue, s.cfg.HookTimeout()); err != nil {
+		s.logger.Warn("after_run hook failed; ignoring", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "error", err)
+	}
 }
 
 func (s *Service) recordCompletedTurn(issueID string, turn int) {
