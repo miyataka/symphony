@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miyataka/symphony/go/internal/tracker"
@@ -26,6 +27,18 @@ type Client struct {
 	cfg          workflow.TrackerConfig
 	http         *http.Client
 	logger       *slog.Logger
+	now          func() time.Time
+	sleep        func(context.Context, time.Duration) error
+
+	rateLimitMu      sync.Mutex
+	graphQLRateLimit *githubRateLimit
+}
+
+const graphQLRemainingBackoffThreshold = 100
+
+type githubRateLimit struct {
+	Remaining int
+	Reset     time.Time
 }
 
 func New(cfg workflow.TrackerConfig) (*Client, error) {
@@ -59,7 +72,20 @@ func NewWithLogger(cfg workflow.TrackerConfig, logger *slog.Logger) (*Client, er
 		cfg:          cfg,
 		http:         &http.Client{Timeout: 30 * time.Second},
 		logger:       logger,
+		now:          time.Now,
+		sleep:        sleepContext,
 	}, nil
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func deriveRestEndpoint(graphQLEndpoint string) string {
@@ -184,6 +210,9 @@ func (c *Client) FetchIssuesByStates(ctx context.Context, states []string) ([]tr
 	}
 
 	c.logFetchSummary(states, summary, len(out))
+	if err := c.hydrateIssues(ctx, out); err != nil {
+		return nil, err
+	}
 
 	sort.SliceStable(out, func(i, j int) bool {
 		left, right := out[i], out[j]
@@ -276,9 +305,9 @@ type projectPage struct {
 }
 
 func (c *Client) fetchProjectItems(ctx context.Context, cursor *string) (projectPage, error) {
-	query := organizationProjectQuery
+	query := organizationProjectSummaryQuery
 	if c.cfg.OwnerType == "user" {
-		query = userProjectQuery
+		query = userProjectSummaryQuery
 	}
 
 	variables := map[string]any{
@@ -307,6 +336,86 @@ func (c *Client) fetchProjectItems(ctx context.Context, cursor *string) (project
 		}, nil
 	}
 	return projectPage{Items: project.Items.Nodes}, nil
+}
+
+func (c *Client) hydrateIssues(ctx context.Context, issues []tracker.Issue) error {
+	const batchSize = 25
+	for start := 0; start < len(issues); start += batchSize {
+		end := start + batchSize
+		if end > len(issues) {
+			end = len(issues)
+		}
+		ids := make([]string, 0, end-start)
+		for i := start; i < end; i++ {
+			if issues[i].ID != "" {
+				ids = append(ids, issues[i].ID)
+			}
+		}
+		if len(ids) == 0 {
+			continue
+		}
+		details, err := c.fetchIssueDetails(ctx, ids)
+		if err != nil {
+			return err
+		}
+		for i := start; i < end; i++ {
+			if detail, ok := details[issues[i].ID]; ok {
+				c.applyIssueDetails(&issues[i], detail)
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Client) fetchIssueDetails(ctx context.Context, ids []string) (map[string]issueContent, error) {
+	var response issueDetailsResponse
+	if err := c.graphql(ctx, issueDetailsQuery, map[string]any{"ids": ids}, &response); err != nil {
+		return nil, err
+	}
+	if len(response.Errors) > 0 {
+		return nil, fmt.Errorf("github graphql: %s", response.Errors[0].Message)
+	}
+	out := make(map[string]issueContent, len(response.Data.Nodes))
+	for _, node := range response.Data.Nodes {
+		if node.Typename == "Issue" && node.ID != "" {
+			out[node.ID] = node
+		}
+	}
+	return out, nil
+}
+
+func (c *Client) applyIssueDetails(issue *tracker.Issue, content issueContent) {
+	labels := make([]string, 0, len(content.Labels.Nodes))
+	for _, label := range content.Labels.Nodes {
+		if label.Name != "" {
+			labels = append(labels, strings.ToLower(label.Name))
+		}
+	}
+	if content.Title != "" {
+		issue.Title = content.Title
+	}
+	issue.Description = content.Body
+	issue.Comments = content.IssueComments(c.cfg.WorkpadMarker)
+	issue.PRReviewComments = content.PRReviewComments(c.cfg.WorkpadMarker)
+	issue.PullRequests = content.PullRequests()
+	if len(labels) > 0 {
+		issue.Labels = labels
+	}
+	if content.URL != "" {
+		issue.URL = content.URL
+	}
+	if content.Repository.NameWithOwner != "" {
+		issue.RepositoryNameWithOwner = content.Repository.NameWithOwner
+		issue.RepositorySSHURL = content.Repository.CloneSSHURL()
+		issue.RepositoryHTMLURL = content.Repository.HTMLURL
+		issue.BranchName = content.BranchName()
+	}
+	if createdAt := parseTimePtr(content.CreatedAt); createdAt != nil {
+		issue.CreatedAt = createdAt
+	}
+	if updatedAt := parseTimePtr(content.UpdatedAt); updatedAt != nil {
+		issue.UpdatedAt = updatedAt
+	}
 }
 
 type fetchSummary struct {
@@ -702,6 +811,9 @@ func (c *Client) repositoryAllowed(nameWithOwner string) bool {
 }
 
 func (c *Client) graphql(ctx context.Context, query string, variables map[string]any, dest any) error {
+	if err := c.waitForGraphQLBudget(ctx); err != nil {
+		return err
+	}
 	body, err := json.Marshal(map[string]any{"query": query, "variables": variables})
 	if err != nil {
 		return err
@@ -719,6 +831,7 @@ func (c *Client) graphql(ctx context.Context, query string, variables map[string
 		return err
 	}
 	defer resp.Body.Close()
+	c.updateGraphQLRateLimit(resp.Header)
 
 	payload, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -730,6 +843,56 @@ func (c *Client) graphql(ctx context.Context, query string, variables map[string
 	return json.Unmarshal(payload, dest)
 }
 
+func (c *Client) waitForGraphQLBudget(ctx context.Context) error {
+	c.rateLimitMu.Lock()
+	limit := c.graphQLRateLimit
+	c.rateLimitMu.Unlock()
+	if limit == nil || limit.Remaining > graphQLRemainingBackoffThreshold {
+		return nil
+	}
+	now := c.now
+	if now == nil {
+		now = time.Now
+	}
+	wait := limit.Reset.Sub(now())
+	if wait <= 0 {
+		return nil
+	}
+	if c.logger != nil {
+		c.logger.Warn(
+			"github graphql rate limit budget low; waiting for reset",
+			"remaining", limit.Remaining,
+			"reset", limit.Reset.Format(time.RFC3339),
+			"wait", wait.String(),
+		)
+	}
+	sleep := c.sleep
+	if sleep == nil {
+		sleep = sleepContext
+	}
+	return sleep(ctx, wait)
+}
+
+func (c *Client) updateGraphQLRateLimit(header http.Header) {
+	if !strings.EqualFold(header.Get("x-ratelimit-resource"), "graphql") {
+		return
+	}
+	remaining, err := strconv.Atoi(header.Get("x-ratelimit-remaining"))
+	if err != nil {
+		return
+	}
+	resetUnix, err := strconv.ParseInt(header.Get("x-ratelimit-reset"), 10, 64)
+	if err != nil {
+		return
+	}
+	c.rateLimitMu.Lock()
+	c.graphQLRateLimit = &githubRateLimit{
+		Remaining: remaining,
+		Reset:     time.Unix(resetUnix, 0),
+	}
+	c.rateLimitMu.Unlock()
+}
+
 type graphQLResponse struct {
 	Data struct {
 		Organization struct {
@@ -738,6 +901,15 @@ type graphQLResponse struct {
 		User struct {
 			Project project `json:"projectV2"`
 		} `json:"user"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type issueDetailsResponse struct {
+	Data struct {
+		Nodes []issueContent `json:"nodes"`
 	} `json:"data"`
 	Errors []struct {
 		Message string `json:"message"`
@@ -1198,11 +1370,37 @@ func (v fieldValue) Priority() *int {
 	return nil
 }
 
-const projectItemFields = `
+const projectItemSummaryFields = `
 id
 content {
   __typename
   ... on Issue {
+    id
+    number
+    title
+    body
+    url
+    state
+    createdAt
+    updatedAt
+    repository { nameWithOwner sshUrl url }
+    labels(first: 25) { nodes { name } }
+    assignees(first: 25) { nodes { login } }
+  }
+}
+fieldValues(first: 50) {
+  nodes {
+    __typename
+    ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } }
+    ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
+    ... on ProjectV2ItemFieldNumberValue { number field { ... on ProjectV2FieldCommon { name } } }
+    ... on ProjectV2ItemFieldIterationValue { title field { ... on ProjectV2FieldCommon { name } } }
+  }
+}`
+
+const issueDetailFields = `
+__typename
+... on Issue {
     id
     number
     title
@@ -1267,19 +1465,10 @@ content {
       }
     }
   }
-}
-fieldValues(first: 50) {
-  nodes {
-    __typename
-    ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } }
-    ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
-    ... on ProjectV2ItemFieldNumberValue { number field { ... on ProjectV2FieldCommon { name } } }
-    ... on ProjectV2ItemFieldIterationValue { title field { ... on ProjectV2FieldCommon { name } } }
-  }
 }`
 
-var organizationProjectQuery = fmt.Sprintf(`
-query SymphonyGitHubProject($login: String!, $number: Int!, $after: String) {
+var organizationProjectSummaryQuery = fmt.Sprintf(`
+query SymphonyGitHubProjectSummary($login: String!, $number: Int!, $after: String) {
   organization(login: $login) {
     projectV2(number: $number) {
       items(first: 23, after: $after) {
@@ -1288,10 +1477,10 @@ query SymphonyGitHubProject($login: String!, $number: Int!, $after: String) {
       }
     }
   }
-}`, projectItemFields)
+}`, projectItemSummaryFields)
 
-var userProjectQuery = fmt.Sprintf(`
-query SymphonyGitHubUserProject($login: String!, $number: Int!, $after: String) {
+var userProjectSummaryQuery = fmt.Sprintf(`
+query SymphonyGitHubUserProjectSummary($login: String!, $number: Int!, $after: String) {
   user(login: $login) {
     projectV2(number: $number) {
       items(first: 23, after: $after) {
@@ -1300,7 +1489,14 @@ query SymphonyGitHubUserProject($login: String!, $number: Int!, $after: String) 
       }
     }
   }
-}`, projectItemFields)
+}`, projectItemSummaryFields)
+
+var issueDetailsQuery = fmt.Sprintf(`
+query SymphonyGitHubIssueDetails($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    %s
+  }
+}`, issueDetailFields)
 
 const projectMetadataFields = `
 id

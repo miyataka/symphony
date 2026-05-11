@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/miyataka/symphony/go/internal/tracker"
 	"github.com/miyataka/symphony/go/internal/workflow"
@@ -234,9 +235,14 @@ func TestFetchIssuesProjectQueryStaysUnderGitHubTotalNodeLimit(t *testing.T) {
 		if payload.Query == "" {
 			t.Fatal("expected GraphQL query")
 		}
-		budget := githubProjectQueryNodeBudget(t, payload.Query)
-		if budget > 500000 {
-			t.Fatalf("project query can request %d possible nodes, exceeding GitHub's 500000 limit", budget)
+		if strings.Contains(payload.Query, "closedByPullRequestsReferences") ||
+			strings.Contains(payload.Query, "reviewThreads") ||
+			strings.Contains(payload.Query, "comments(first: 50)") {
+			t.Fatalf("project polling query should not include heavyweight issue details:\n%s", payload.Query)
+		}
+		budget := githubProjectSummaryQueryNodeBudget(t, payload.Query)
+		if budget > 2500 {
+			t.Fatalf("project summary query can request %d possible nodes, expected <= 2500", budget)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -271,6 +277,202 @@ func TestFetchIssuesProjectQueryStaysUnderGitHubTotalNodeLimit(t *testing.T) {
 	if _, err := client.FetchCandidateIssues(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestFetchIssuesByStatesHydratesOnlyMatchedIssues(t *testing.T) {
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		queries = append(queries, payload.Query)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(payload.Query, "SymphonyGitHubUserProjectSummary"):
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"user": {
+						"projectV2": {
+							"items": {
+								"nodes": [
+									{
+										"id": "PVTI_1",
+										"content": {
+											"__typename": "Issue",
+											"id": "I_1",
+											"number": 42,
+											"title": "Implement thing",
+											"body": "Body text",
+											"url": "https://github.com/miyataka/symphony/issues/42",
+											"state": "OPEN",
+											"createdAt": "2026-05-01T00:00:00Z",
+											"updatedAt": "2026-05-01T00:01:00Z",
+											"repository": {
+												"nameWithOwner": "miyataka/symphony",
+												"sshUrl": "git@github.com:miyataka/symphony.git",
+												"url": "https://github.com/miyataka/symphony"
+											},
+											"labels": {"nodes": []},
+											"assignees": {"nodes": []}
+										},
+										"fieldValues": {
+											"nodes": [{"__typename": "ProjectV2ItemFieldSingleSelectValue", "name": "Todo", "field": {"name": "Status"}}]
+										}
+									},
+									{
+										"id": "PVTI_2",
+										"content": {
+											"__typename": "Issue",
+											"id": "I_2",
+											"number": 99,
+											"title": "Done thing",
+											"body": "Body text",
+											"url": "https://github.com/miyataka/symphony/issues/99",
+											"state": "OPEN",
+											"repository": {"nameWithOwner": "miyataka/symphony"},
+											"labels": {"nodes": []},
+											"assignees": {"nodes": []}
+										},
+										"fieldValues": {
+											"nodes": [{"__typename": "ProjectV2ItemFieldSingleSelectValue", "name": "Done", "field": {"name": "Status"}}]
+										}
+									}
+								],
+								"pageInfo": {"hasNextPage": false, "endCursor": null}
+							}
+						}
+					}
+				}
+			}`))
+		case strings.Contains(payload.Query, "SymphonyGitHubIssueDetails"):
+			ids, ok := payload.Variables["ids"].([]any)
+			if !ok {
+				t.Fatalf("expected ids variable, got %#v", payload.Variables["ids"])
+			}
+			if len(ids) != 1 || ids[0] != "I_1" {
+				t.Fatalf("expected only matched issue to be hydrated, got %#v", ids)
+			}
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"nodes": [{
+						"__typename": "Issue",
+						"id": "I_1",
+						"number": 42,
+						"title": "Implement thing",
+						"body": "Detailed body",
+						"url": "https://github.com/miyataka/symphony/issues/42",
+						"state": "OPEN",
+						"repository": {"nameWithOwner": "miyataka/symphony"},
+						"labels": {"nodes": []},
+						"assignees": {"nodes": []},
+						"comments": {
+							"nodes": [{
+								"id": "IC_1",
+								"body": "please include this",
+								"url": "https://github.com/miyataka/symphony/issues/42#issuecomment-1",
+								"createdAt": "2026-05-01T00:03:00Z",
+								"author": {"login": "reviewer"}
+							}]
+						},
+						"closedByPullRequestsReferences": {"nodes": []}
+					}]
+				}
+			}`))
+		default:
+			t.Fatalf("unexpected query: %s", payload.Query)
+		}
+	}))
+	defer server.Close()
+
+	client, err := New(workflow.TrackerConfig{
+		Token:          "token",
+		Endpoint:       server.URL,
+		Owner:          "miyataka",
+		OwnerType:      "user",
+		ProjectNumber:  1,
+		StatusField:    "Status",
+		ActiveStates:   []string{"Todo"},
+		TerminalStates: []string{"Done"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues, err := client.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected one issue, got %d", len(issues))
+	}
+	if issues[0].Description != "Detailed body" {
+		t.Fatalf("expected hydrated description, got %q", issues[0].Description)
+	}
+	if len(issues[0].Comments) != 1 || issues[0].Comments[0].ID != "IC_1" {
+		t.Fatalf("expected hydrated comments, got %#v", issues[0].Comments)
+	}
+	if len(queries) != 2 {
+		t.Fatalf("expected summary query plus detail query, got %d queries", len(queries))
+	}
+}
+
+func TestGraphQLWaitsWhenRemainingBudgetIsLow(t *testing.T) {
+	requests := 0
+	reset := time.Unix(1778526073, 0)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("x-ratelimit-resource", "graphql")
+		w.Header().Set("x-ratelimit-remaining", "50")
+		w.Header().Set("x-ratelimit-reset", strconv.FormatInt(reset.Unix(), 10))
+		_, _ = w.Write([]byte(`{"data":{}}`))
+	}))
+	defer server.Close()
+
+	client, err := New(workflow.TrackerConfig{
+		Token:    "token",
+		Endpoint: server.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := reset.Add(-2 * time.Minute)
+	var slept time.Duration
+	client.now = func() time.Time { return now }
+	client.sleep = func(_ context.Context, d time.Duration) error {
+		slept = d
+		now = now.Add(d)
+		return nil
+	}
+
+	var response graphQLMutationResponse
+	if err := client.graphql(context.Background(), `query First { viewer { login } }`, nil, &response); err != nil {
+		t.Fatal(err)
+	}
+	if slept != 0 {
+		t.Fatalf("first request should not sleep before rate limit headers are known, slept %s", slept)
+	}
+	if err := client.graphql(context.Background(), `query Second { viewer { login } }`, nil, &response); err != nil {
+		t.Fatal(err)
+	}
+	if slept != 2*time.Minute {
+		t.Fatalf("expected second request to wait for reset, slept %s", slept)
+	}
+	if requests != 2 {
+		t.Fatalf("expected both requests to complete, got %d", requests)
+	}
+}
+
+func githubProjectSummaryQueryNodeBudget(t *testing.T, query string) int {
+	t.Helper()
+	items := graphqlFirstArgument(t, query, `items\s*\(\s*first:\s*(\d+)`)
+	return items +
+		items*graphqlFirstArgument(t, query, `labels\s*\(\s*first:\s*(\d+)`) +
+		items*graphqlFirstArgument(t, query, `assignees\s*\(\s*first:\s*(\d+)`) +
+		items*graphqlFirstArgument(t, query, `fieldValues\s*\(\s*first:\s*(\d+)`)
 }
 
 func githubProjectQueryNodeBudget(t *testing.T, query string) int {
