@@ -22,7 +22,13 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.Workspace
 
       import SymphonyElixir.TestSupport,
-        only: [write_workflow_file!: 1, write_workflow_file!: 2, restore_env: 2, stop_default_http_server: 0]
+        only: [
+          ensure_application_started!: 0,
+          write_workflow_file!: 1,
+          write_workflow_file!: 2,
+          restore_env: 2,
+          stop_default_http_server: 0
+        ]
 
       setup do
         workflow_root =
@@ -31,6 +37,7 @@ defmodule SymphonyElixir.TestSupport do
             "symphony-elixir-workflow-#{System.unique_integer([:positive])}"
           )
 
+        ensure_application_started!()
         File.mkdir_p!(workflow_root)
         workflow_file = Path.join(workflow_root, "WORKFLOW.md")
         write_workflow_file!(workflow_file)
@@ -69,8 +76,28 @@ defmodule SymphonyElixir.TestSupport do
   def restore_env(key, nil), do: System.delete_env(key)
   def restore_env(key, value), do: System.put_env(key, value)
 
+  def ensure_application_started! do
+    case Process.whereis(SymphonyElixir.Supervisor) do
+      nil ->
+        {:ok, _apps} = Application.ensure_all_started(:symphony_elixir)
+        :ok
+
+      _pid ->
+        :ok
+    end
+  end
+
   def stop_default_http_server do
-    case Enum.find(Supervisor.which_children(SymphonyElixir.Supervisor), fn
+    supervisor = Process.whereis(SymphonyElixir.Supervisor)
+
+    children =
+      if is_pid(supervisor) do
+        Supervisor.which_children(supervisor)
+      else
+        []
+      end
+
+    case Enum.find(children, fn
            {SymphonyElixir.HttpServer, _pid, _type, _modules} -> true
            _child -> false
          end) do
