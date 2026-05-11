@@ -91,7 +91,7 @@ func TestSortIssues(t *testing.T) {
 
 func TestRunAgentTurnUsesTempPromptOutsideWorkspace(t *testing.T) {
 	cfg := testConfig()
-	cfg.Agent.Command = `printf '%s' "$SYMPHONY_PROMPT_FILE" > prompt_path.txt; cat "$SYMPHONY_PROMPT_FILE" > prompt_stdin.txt`
+	cfg.Agent.Command = `printf '%s' "$SYMPHONY_PROMPT_FILE" > prompt_path.txt; cat "$SYMPHONY_PROMPT_FILE" > prompt_stdin.txt; printf 'done\n'`
 	service := New(Options{
 		Config:         cfg,
 		PromptTemplate: "Issue {{ .Issue.Identifier }} turn {{ .Turn }}",
@@ -130,6 +130,58 @@ func TestRunAgentTurnUsesTempPromptOutsideWorkspace(t *testing.T) {
 	}
 	if _, err := os.Stat(promptPath); !os.IsNotExist(err) {
 		t.Fatalf("temporary prompt should be cleaned up after agent.command: %v", err)
+	}
+}
+
+func TestRunAgentTurnRejectsEmptyCommandOutput(t *testing.T) {
+	cfg := testConfig()
+	cfg.Agent.Command = `true`
+	service := New(Options{
+		Config:         cfg,
+		PromptTemplate: "Issue {{ .Issue.Identifier }} turn {{ .Turn }}",
+		Tracker:        &recordingTracker{},
+	})
+
+	err := service.runAgentTurn(context.Background(), t.TempDir(), tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "In Progress",
+	}, 1)
+	if err == nil {
+		t.Fatal("expected empty agent output to fail")
+	}
+	if !strings.Contains(err.Error(), "produced no output") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunIssueRecordsEmptyOutputReason(t *testing.T) {
+	cfg := testConfig()
+	cfg.Workspace.Root = t.TempDir()
+	cfg.Agent.Command = `true`
+	recorder := &recordingTracker{}
+	service := New(Options{
+		Config:         cfg,
+		PromptTemplate: "Issue {{ .Issue.Identifier }} turn {{ .Turn }}",
+		Tracker:        recorder,
+	})
+
+	err := service.runIssue(context.Background(), tracker.Issue{
+		ID:                      "I_1",
+		Identifier:              "repo#1",
+		Title:                   "Issue",
+		State:                   "In Progress",
+		RepositoryNameWithOwner: "repo",
+	})
+	if err == nil {
+		t.Fatal("expected empty agent output to fail")
+	}
+	if !strings.Contains(recorder.workpad, "produced no output") {
+		t.Fatalf("expected workpad to explain empty output, got: %q", recorder.workpad)
+	}
+	if strings.Contains(recorder.workpad, "ready for review") {
+		t.Fatalf("expected workpad not to mark issue ready for review, got: %q", recorder.workpad)
 	}
 }
 
