@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -19,6 +20,8 @@ import (
 	"github.com/miyataka/symphony/go/internal/workflow"
 	"github.com/miyataka/symphony/go/internal/workspace"
 )
+
+var errAgentCommandNoOutput = errors.New("agent command completed successfully but produced no output")
 
 type Options struct {
 	Config         workflow.Config
@@ -286,6 +289,7 @@ func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) error {
 		}
 		if err := s.runAgentTurn(ctx, path, issue, turn); err != nil {
 			s.runAfterBestEffort(ctx, path, issue)
+			s.upsertWorkpad(ctx, issue, s.workpadBody(issue, issue.State, path, s.runFailureNote(issue.State, err)))
 			return err
 		}
 		s.runAfterBestEffort(ctx, path, issue)
@@ -458,12 +462,43 @@ func (s *Service) runAgentTurn(parent context.Context, path string, issue tracke
 		"SYMPHONY_TURN="+fmt.Sprint(turn),
 	)
 	cmd.Env = append(cmd.Env, issue.Env()...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	output := &agentOutputActivity{}
+	cmd.Stdout = io.MultiWriter(os.Stdout, output)
+	cmd.Stderr = io.MultiWriter(os.Stderr, output)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("agent command: %w", err)
 	}
+	if !output.Seen() {
+		return errAgentCommandNoOutput
+	}
 	return nil
+}
+
+type agentOutputActivity struct {
+	mu   sync.Mutex
+	seen bool
+}
+
+func (a *agentOutputActivity) Write(p []byte) (int, error) {
+	if len(bytes.TrimSpace(p)) > 0 {
+		a.mu.Lock()
+		a.seen = true
+		a.mu.Unlock()
+	}
+	return len(p), nil
+}
+
+func (a *agentOutputActivity) Seen() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.seen
+}
+
+func (s *Service) runFailureNote(state string, err error) string {
+	if errors.Is(err, errAgentCommandNoOutput) {
+		return "Agent command completed successfully but produced no output; leaving issue in " + state + " for retry instead of moving it to " + s.cfg.Tracker.HandoffState + "."
+	}
+	return "Agent run failed: " + err.Error() + "; leaving issue in its current state for retry instead of moving it to " + s.cfg.Tracker.HandoffState + "."
 }
 
 func writeWorkspacePrompt(path, prompt string) (string, error) {
