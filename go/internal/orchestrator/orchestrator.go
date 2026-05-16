@@ -5,10 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -16,6 +14,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/miyataka/symphony/go/internal/shellcmd"
 	"github.com/miyataka/symphony/go/internal/tracker"
 	"github.com/miyataka/symphony/go/internal/workflow"
 	"github.com/miyataka/symphony/go/internal/workspace"
@@ -452,46 +451,26 @@ func (s *Service) runAgentTurn(parent context.Context, path string, issue tracke
 	}
 	defer cleanupPrompt()
 
-	ctx, cancel := context.WithTimeout(parent, s.cfg.TurnTimeout())
+	timeout := s.cfg.TurnTimeout()
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "bash", "-lc", s.cfg.Agent.Command)
-	cmd.Dir = path
-	cmd.Env = append(os.Environ(),
+	env := append(os.Environ(),
 		"SYMPHONY_PROMPT_FILE="+promptPath,
 		"SYMPHONY_TURN="+fmt.Sprint(turn),
 	)
-	cmd.Env = append(cmd.Env, issue.Env()...)
-	output := &agentOutputActivity{}
-	cmd.Stdout = io.MultiWriter(os.Stdout, output)
-	cmd.Stderr = io.MultiWriter(os.Stderr, output)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("agent command: %w", err)
+	env = append(env, issue.Env()...)
+	result := shellcmd.RunBash(ctx, path, s.cfg.Agent.Command, env, os.Stdout, os.Stderr)
+	if result.TimedOut {
+		return fmt.Errorf("agent command timed out after %s%s", timeout, commandOutputSuffix(result.Output))
 	}
-	if !output.Seen() {
+	if result.Err != nil {
+		return fmt.Errorf("agent command failed: %w%s", result.Err, commandOutputSuffix(result.Output))
+	}
+	if !result.Seen {
 		return errAgentCommandNoOutput
 	}
 	return nil
-}
-
-type agentOutputActivity struct {
-	mu   sync.Mutex
-	seen bool
-}
-
-func (a *agentOutputActivity) Write(p []byte) (int, error) {
-	if len(bytes.TrimSpace(p)) > 0 {
-		a.mu.Lock()
-		a.seen = true
-		a.mu.Unlock()
-	}
-	return len(p), nil
-}
-
-func (a *agentOutputActivity) Seen() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.seen
 }
 
 func (s *Service) runFailureNote(state string, err error) string {
@@ -527,6 +506,14 @@ func writeCommandPrompt(prompt string) (string, func(), error) {
 		return "", nil, err
 	}
 	return promptPath, cleanup, nil
+}
+
+func commandOutputSuffix(output string) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return ""
+	}
+	return ": output: " + output
 }
 
 func (s *Service) refreshIssue(ctx context.Context, id string) (tracker.Issue, bool, error) {

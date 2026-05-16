@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/miyataka/symphony/go/internal/shellcmd"
 	"github.com/miyataka/symphony/go/internal/tracker"
 	"github.com/miyataka/symphony/go/internal/workflow"
 )
@@ -56,7 +56,7 @@ func (m Manager) Ensure(ctx context.Context, issue tracker.Issue, timeout time.D
 		return "", false, err
 	}
 	if created && strings.TrimSpace(m.Hooks.AfterCreate) != "" {
-		if err := runHook(ctx, path, m.Hooks.AfterCreate, issue, timeout); err != nil {
+		if err := runHook(ctx, path, m.Hooks.AfterCreate, "after_create", issue, timeout); err != nil {
 			return "", false, fmt.Errorf("after_create hook: %w", err)
 		}
 	}
@@ -74,7 +74,7 @@ func (m Manager) Remove(ctx context.Context, identifier string, timeout time.Dur
 	}
 	if strings.TrimSpace(m.Hooks.BeforeRemove) != "" {
 		issue := tracker.Issue{Identifier: identifier}
-		_ = runHook(ctx, path, m.Hooks.BeforeRemove, issue, timeout)
+		_ = runHook(ctx, path, m.Hooks.BeforeRemove, "before_remove", issue, timeout)
 	}
 	return os.RemoveAll(path)
 }
@@ -90,7 +90,7 @@ func (m Manager) RemoveEntry(ctx context.Context, entry Entry, timeout time.Dura
 	}
 	if strings.TrimSpace(m.Hooks.BeforeRemove) != "" {
 		issue := tracker.Issue{Identifier: entry.Name}
-		_ = runHook(ctx, path, m.Hooks.BeforeRemove, issue, timeout)
+		_ = runHook(ctx, path, m.Hooks.BeforeRemove, "before_remove", issue, timeout)
 	}
 	return os.RemoveAll(path)
 }
@@ -197,26 +197,36 @@ func RunBefore(ctx context.Context, path string, hooks workflow.HooksConfig, iss
 	if strings.TrimSpace(hooks.BeforeRun) == "" {
 		return nil
 	}
-	return runHook(ctx, path, hooks.BeforeRun, issue, timeout)
+	return runHook(ctx, path, hooks.BeforeRun, "before_run", issue, timeout)
 }
 
 func RunAfter(ctx context.Context, path string, hooks workflow.HooksConfig, issue tracker.Issue, timeout time.Duration) error {
 	if strings.TrimSpace(hooks.AfterRun) == "" {
 		return nil
 	}
-	return runHook(ctx, path, hooks.AfterRun, issue, timeout)
+	return runHook(ctx, path, hooks.AfterRun, "after_run", issue, timeout)
 }
 
-func runHook(parent context.Context, path, command string, issue tracker.Issue, timeout time.Duration) error {
+func runHook(parent context.Context, path, command, hookName string, issue tracker.Issue, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
-	cmd.Dir = path
-	cmd.Env = append(os.Environ(), issue.Env()...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	result := shellcmd.RunBash(ctx, path, command, append(os.Environ(), issue.Env()...), os.Stdout, os.Stderr)
+	if result.TimedOut {
+		return fmt.Errorf("workspace hook %s timed out after %s%s", hookName, timeout, hookOutputSuffix(result.Output))
+	}
+	if result.Err != nil {
+		return fmt.Errorf("workspace hook %s failed: %w%s", hookName, result.Err, hookOutputSuffix(result.Output))
+	}
+	return nil
+}
+
+func hookOutputSuffix(output string) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return ""
+	}
+	return ": output: " + output
 }
 
 var unsafeIdentifier = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)

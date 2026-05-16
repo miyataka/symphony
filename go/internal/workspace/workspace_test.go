@@ -192,6 +192,36 @@ func TestRemoveEntryRejectsWorkspaceOutsideRoot(t *testing.T) {
 	assertFileContents(t, outsideFile, "keep\n")
 }
 
+func TestRunBeforeReportsHookOutputOnFailure(t *testing.T) {
+	err := RunBefore(context.Background(), t.TempDir(), workflow.HooksConfig{
+		BeforeRun: "echo hook-visible-output; echo hook-visible-error >&2; exit 7",
+	}, tracker.Issue{Identifier: "MT-HOOK"}, testHookTimeout)
+	if err == nil {
+		t.Fatal("expected hook failure")
+	}
+	message := err.Error()
+	for _, want := range []string{"workspace hook before_run failed", "exit status 7", "hook-visible-output", "hook-visible-error"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected error to contain %q, got: %v", want, err)
+		}
+	}
+}
+
+func TestRunBeforeReportsHookTimeoutOutput(t *testing.T) {
+	err := RunBefore(context.Background(), t.TempDir(), workflow.HooksConfig{
+		BeforeRun: "echo before-timeout; sleep 5",
+	}, tracker.Issue{Identifier: "MT-HOOK"}, 50*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected hook timeout")
+	}
+	message := err.Error()
+	for _, want := range []string{"workspace hook before_run timed out", "50ms", "before-timeout"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected error to contain %q, got: %v", want, err)
+		}
+	}
+}
+
 func assertFileContents(t *testing.T, path, want string) {
 	t.Helper()
 	got, err := os.ReadFile(path)

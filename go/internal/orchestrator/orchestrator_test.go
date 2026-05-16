@@ -156,6 +156,59 @@ func TestRunAgentTurnRejectsEmptyCommandOutput(t *testing.T) {
 	}
 }
 
+func TestRunAgentTurnReportsCommandOutputOnFailure(t *testing.T) {
+	cfg := testConfig()
+	cfg.Agent.Command = `echo agent-visible-output; echo agent-visible-error >&2; exit 9`
+	service := New(Options{
+		Config:         cfg,
+		PromptTemplate: "Issue {{ .Issue.Identifier }} turn {{ .Turn }}",
+		Tracker:        &recordingTracker{},
+	})
+
+	err := service.runAgentTurn(context.Background(), t.TempDir(), tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "In Progress",
+	}, 1)
+	if err == nil {
+		t.Fatal("expected agent command failure")
+	}
+	message := err.Error()
+	for _, want := range []string{"agent command failed", "exit status 9", "agent-visible-output", "agent-visible-error"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected error to contain %q, got: %v", want, err)
+		}
+	}
+}
+
+func TestRunAgentTurnReportsTimeoutOutput(t *testing.T) {
+	cfg := testConfig()
+	cfg.Agent.TurnTimeoutMS = 50
+	cfg.Agent.Command = `echo before-timeout; sleep 5`
+	service := New(Options{
+		Config:         cfg,
+		PromptTemplate: "Issue {{ .Issue.Identifier }} turn {{ .Turn }}",
+		Tracker:        &recordingTracker{},
+	})
+
+	err := service.runAgentTurn(context.Background(), t.TempDir(), tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "In Progress",
+	}, 1)
+	if err == nil {
+		t.Fatal("expected agent command timeout")
+	}
+	message := err.Error()
+	for _, want := range []string{"agent command timed out", "50ms", "before-timeout"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected error to contain %q, got: %v", want, err)
+		}
+	}
+}
+
 func TestRunIssueRecordsEmptyOutputReason(t *testing.T) {
 	cfg := testConfig()
 	cfg.Workspace.Root = t.TempDir()
