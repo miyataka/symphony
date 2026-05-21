@@ -196,6 +196,85 @@ defmodule SymphonyElixir.RunHealthTest do
     assert health.last_meaningful_progress_at == now
   end
 
+  test "command and file-change activity count as meaningful progress" do
+    now = DateTime.utc_now()
+    progress_at = DateTime.add(now, -700, :second)
+
+    command_entry =
+      entry(
+        last_meaningful_progress_at: progress_at,
+        last_codex_timestamp: now,
+        last_codex_event: :notification,
+        last_codex_message: %{
+          event: :notification,
+          message: %{
+            "payload" => %{
+              "method" => "item/commandExecution/outputDelta",
+              "params" => %{"outputDelta" => "still running"}
+            }
+          },
+          timestamp: now
+        }
+      )
+
+    assert RunHealth.meaningful_progress?(command_entry, config())
+
+    command_health = RunHealth.evaluate(command_entry, now, config())
+    assert command_health.status == :active
+    assert command_health.reason == :codex_activity
+
+    file_change_entry =
+      entry(
+        last_meaningful_progress_at: progress_at,
+        last_codex_timestamp: now,
+        last_codex_event: :notification,
+        last_codex_message: %{
+          event: :notification,
+          message: %{
+            "payload" => %{
+              "method" => "item/completed",
+              "params" => %{"item" => %{"type" => "fileChange", "status" => "completed"}}
+            }
+          },
+          timestamp: now
+        }
+      )
+
+    assert RunHealth.meaningful_progress?(file_change_entry, config())
+
+    file_change_health = RunHealth.evaluate(file_change_entry, now, config())
+    assert file_change_health.status == :active
+    assert file_change_health.reason == :codex_activity
+  end
+
+  test "dynamic tool completion counts as meaningful progress" do
+    now = DateTime.utc_now()
+    progress_at = DateTime.add(now, -700, :second)
+
+    tool_entry =
+      entry(
+        last_meaningful_progress_at: progress_at,
+        last_codex_timestamp: now,
+        last_codex_event: :tool_call_completed,
+        last_codex_message: %{
+          event: :tool_call_completed,
+          message: %{
+            "payload" => %{
+              "method" => "item/tool/call",
+              "params" => %{"tool" => "linear_graphql"}
+            }
+          },
+          timestamp: now
+        }
+      )
+
+    assert RunHealth.meaningful_progress?(tool_entry, config())
+
+    health = RunHealth.evaluate(tool_entry, now, config())
+    assert health.status == :active
+    assert health.reason == :codex_activity
+  end
+
   test "disabled config returns basic active health without actions" do
     now = DateTime.utc_now()
     progress_at = DateTime.add(now, -1_000, :second)

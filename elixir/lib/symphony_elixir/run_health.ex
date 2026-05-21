@@ -55,6 +55,11 @@ defmodule SymphonyElixir.RunHealth do
           turn_delta: turn_delta(running_entry)
         })
 
+      codex_activity_progress?(running_entry) ->
+        health(:active, :codex_activity, :watching, now, 0, %{
+          event_signature: event_signature(running_entry)
+        })
+
       true ->
         nil
     end
@@ -114,7 +119,7 @@ defmodule SymphonyElixir.RunHealth do
 
   @spec meaningful_progress?(map() | struct(), map() | struct()) :: boolean()
   def meaningful_progress?(entry, config) do
-    token_progress?(entry, config) or turn_progress?(entry)
+    token_progress?(entry, config) or turn_progress?(entry) or codex_activity_progress?(entry)
   end
 
   defp health(status, reason, next_action, last_meaningful_progress_at, idle_ms, details) do
@@ -157,6 +162,70 @@ defmodule SymphonyElixir.RunHealth do
   defp turn_delta(entry) do
     integer(entry, :turn_count) - integer(entry, :health_last_progress_turn_count)
   end
+
+  defp codex_activity_progress?(entry) do
+    activity_after_last_progress?(entry) and
+      (progress_payload?(latest_payload(entry)) or
+         (progress_event?(get(entry, :last_codex_event)) and progress_signature_changed?(entry)))
+  end
+
+  defp progress_event?(event) when event in [:session_started, :turn_completed, :tool_call_completed], do: true
+  defp progress_event?(_event), do: false
+
+  defp progress_signature_changed?(entry) do
+    event_signature(entry) != get(entry, :last_progress_signature)
+  end
+
+  defp activity_after_last_progress?(entry) do
+    case {get(entry, :last_codex_timestamp), get(entry, :last_meaningful_progress_at)} do
+      {%DateTime{} = timestamp, %DateTime{} = progress_at} ->
+        DateTime.compare(timestamp, progress_at) == :gt
+
+      {%DateTime{}, _progress_at} ->
+        true
+
+      _timestamps ->
+        false
+    end
+  end
+
+  defp latest_payload(entry) do
+    entry
+    |> get(:last_codex_message, %{})
+    |> get(:message, %{})
+    |> case do
+      %{} = body -> get(body, :payload, body)
+      _body -> %{}
+    end
+  end
+
+  defp progress_payload?(%{} = payload) do
+    progress_method?(get(payload, :method)) or progress_item_type?(get(payload, :params, %{}))
+  end
+
+  defp progress_payload?(_payload), do: false
+
+  defp progress_method?(method) when is_binary(method) do
+    String.contains?(method, [
+      "commandExecution",
+      "fileChange",
+      "exec_command",
+      "applyPatch"
+    ])
+  end
+
+  defp progress_method?(_method), do: false
+
+  defp progress_item_type?(%{} = params) do
+    item_type =
+      params
+      |> get(:item, %{})
+      |> get(:type)
+
+    item_type in ["commandExecution", "fileChange"]
+  end
+
+  defp progress_item_type?(_params), do: false
 
   defp repeated_same_event?(entry, config) do
     integer(entry, :repeated_event_count) >= config_integer(config, :repeated_event_suspect_count)
