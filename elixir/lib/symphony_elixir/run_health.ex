@@ -166,6 +166,7 @@ defmodule SymphonyElixir.RunHealth do
   defp codex_activity_progress?(entry) do
     activity_after_last_progress?(entry) and
       (progress_payload?(latest_payload(entry)) or
+         get(entry, :last_codex_event) == :tool_call_completed or
          (progress_event?(get(entry, :last_codex_event)) and progress_signature_changed?(entry)))
   end
 

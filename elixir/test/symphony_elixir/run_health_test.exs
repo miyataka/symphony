@@ -275,6 +275,35 @@ defmodule SymphonyElixir.RunHealthTest do
     assert health.reason == :codex_activity
   end
 
+  test "repeated dynamic tool completion still counts as meaningful progress" do
+    now = DateTime.utc_now()
+    progress_at = DateTime.add(now, -700, :second)
+
+    tool_entry =
+      entry(
+        last_meaningful_progress_at: progress_at,
+        last_progress_signature: "tool_call_completed",
+        last_codex_timestamp: now,
+        last_codex_event: :tool_call_completed,
+        last_codex_message: %{
+          event: :tool_call_completed,
+          message: %{
+            "payload" => %{
+              "method" => "item/tool/call",
+              "params" => %{"tool" => "linear_graphql"}
+            }
+          },
+          timestamp: now
+        }
+      )
+
+    assert RunHealth.meaningful_progress?(tool_entry, config())
+
+    health = RunHealth.evaluate(tool_entry, now, config())
+    assert health.status == :active
+    assert health.reason == :codex_activity
+  end
+
   test "disabled config returns basic active health without actions" do
     now = DateTime.utc_now()
     progress_at = DateTime.add(now, -1_000, :second)

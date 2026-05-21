@@ -537,6 +537,111 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     refute Map.has_key?(state.retry_attempts, issue_id)
   end
 
+  test "repeated dynamic tool completion after self-report request clears deadline" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      max_concurrent_agents: 1,
+      codex_stall_timeout_ms: 60_000,
+      observability_run_health_quiet_after_ms: 100,
+      observability_run_health_suspect_after_ms: 200,
+      observability_run_health_self_report_timeout_ms: 100
+    )
+
+    issue_id = "issue-self-report-tool-progress"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-SRTP",
+      title: "Self report tool progress",
+      state: "In Progress"
+    }
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
+    orchestrator_name = Module.concat(__MODULE__, :SelfReportToolProgressOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    worker_pid =
+      spawn(fn ->
+        receive do
+          :done -> :ok
+        end
+      end)
+
+    now = DateTime.utc_now()
+    stale_at = DateTime.add(now, -5, :second)
+    requested_at = DateTime.add(now, -2, :second)
+    deadline = DateTime.add(now, -1, :second)
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: worker_pid,
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: "thread-self-report-tool-progress",
+      turn_count: 1,
+      last_codex_message: %{event: :tool_call_completed, message: %{}, timestamp: stale_at},
+      last_codex_timestamp: stale_at,
+      last_codex_event: :tool_call_completed,
+      last_meaningful_progress_at: stale_at,
+      last_progress_signature: "tool_call_completed",
+      repeated_event_count: 0,
+      codex_total_tokens: 0,
+      health_last_progress_total_tokens: 0,
+      health_last_progress_turn_count: 1,
+      self_report_state: :requested,
+      self_report_attempts: 1,
+      self_report_requested_at: requested_at,
+      self_report_deadline_at: deadline,
+      started_at: stale_at
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    progress_at = DateTime.utc_now()
+
+    send(pid, {
+      :codex_worker_update,
+      issue_id,
+      %{
+        event: :tool_call_completed,
+        payload: %{
+          "payload" => %{
+            "method" => "item/tool/call",
+            "params" => %{"tool" => "linear_graphql"}
+          }
+        },
+        timestamp: progress_at
+      }
+    })
+
+    state_after_progress = :sys.get_state(pid)
+    updated = state_after_progress.running[issue_id]
+
+    assert updated.self_report_state == nil
+    assert updated.self_report_deadline_at == nil
+    assert updated.last_meaningful_progress_at == progress_at
+
+    send(pid, :run_poll_cycle)
+    Process.sleep(100)
+    state = :sys.get_state(pid)
+
+    assert Process.alive?(worker_pid)
+    assert Map.has_key?(state.running, issue_id)
+    refute Map.has_key?(state.retry_attempts, issue_id)
+  end
+
   test "early retry disabled keeps worker running and warning does not promise retry" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
