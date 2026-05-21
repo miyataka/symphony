@@ -112,7 +112,7 @@ Repository: {{ .Issue.RepositoryNameWithOwner }}
 Description:
 {{ .Issue.Description }}
 
-{{ if .Issue.Comments }}Issue comments:
+{{ if .Issue.Comments }}Issue comments from repository owners or organization members:
 {{ range .Issue.Comments }}
 - {{ .Author }} {{ .URL }}
 {{ .Body }}
@@ -130,7 +130,7 @@ Description:
 {{ end }}
 {{ end }}
 
-{{ if .Issue.PRReviewComments }}Unresolved PR review comments:
+{{ if .Issue.PRReviewComments }}Unresolved PR review comments from repository owners or organization members:
 {{ range .Issue.PRReviewComments }}
 - {{ .Author }}{{ if .AuthorIsBot }} (bot){{ end }} on PR #{{ .PRNumber }} {{ .Path }}{{ if .Line }}:{{ .Line }}{{ end }} {{ .URL }}
 {{ .Body }}
