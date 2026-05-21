@@ -888,7 +888,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   end
 
   test "run health observability config uses conservative defaults" do
-    write_workflow_file!(Workflow.workflow_file_path())
+    write_workflow_file!(Workflow.workflow_file_path(), observability_run_health_omit: true)
 
     settings = Config.settings!()
 

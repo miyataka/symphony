@@ -149,6 +149,7 @@ defmodule SymphonyElixir.TestSupport do
           observability_enabled: true,
           observability_refresh_ms: 1_000,
           observability_render_interval_ms: 16,
+          observability_run_health_omit: false,
           observability_run_health_enabled: true,
           observability_run_health_quiet_after_ms: 300_000,
           observability_run_health_suspect_after_ms: 600_000,
@@ -193,6 +194,7 @@ defmodule SymphonyElixir.TestSupport do
     observability_enabled = Keyword.get(config, :observability_enabled)
     observability_refresh_ms = Keyword.get(config, :observability_refresh_ms)
     observability_render_interval_ms = Keyword.get(config, :observability_render_interval_ms)
+    observability_run_health_omit = Keyword.get(config, :observability_run_health_omit)
     observability_run_health_enabled = Keyword.get(config, :observability_run_health_enabled)
     observability_run_health_quiet_after_ms = Keyword.get(config, :observability_run_health_quiet_after_ms)
     observability_run_health_suspect_after_ms = Keyword.get(config, :observability_run_health_suspect_after_ms)
@@ -247,6 +249,7 @@ defmodule SymphonyElixir.TestSupport do
           observability_enabled,
           observability_refresh_ms,
           observability_render_interval_ms,
+          observability_run_health_omit,
           observability_run_health_enabled,
           observability_run_health_quiet_after_ms,
           observability_run_health_suspect_after_ms,
@@ -320,6 +323,7 @@ defmodule SymphonyElixir.TestSupport do
          enabled,
          refresh_ms,
          render_interval_ms,
+         run_health_omit,
          run_health_enabled,
          run_health_quiet_after_ms,
          run_health_suspect_after_ms,
@@ -333,14 +337,52 @@ defmodule SymphonyElixir.TestSupport do
       "  dashboard_enabled: #{yaml_value(enabled)}",
       "  refresh_ms: #{yaml_value(refresh_ms)}",
       "  render_interval_ms: #{yaml_value(render_interval_ms)}",
+      run_health_yaml(
+        run_health_omit,
+        run_health_enabled,
+        run_health_quiet_after_ms,
+        run_health_suspect_after_ms,
+        run_health_self_report_timeout_ms,
+        run_health_early_retry_on_self_report_failure,
+        run_health_min_token_progress_delta,
+        run_health_repeated_event_suspect_count
+      )
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
+  end
+
+  defp run_health_yaml(
+         true,
+         _enabled,
+         _quiet_after_ms,
+         _suspect_after_ms,
+         _self_report_timeout_ms,
+         _early_retry,
+         _min_token_delta,
+         _repeated_event_count
+       ),
+       do: nil
+
+  defp run_health_yaml(
+         _omit,
+         enabled,
+         quiet_after_ms,
+         suspect_after_ms,
+         self_report_timeout_ms,
+         early_retry_on_self_report_failure,
+         min_token_progress_delta,
+         repeated_event_suspect_count
+       ) do
+    [
       "  run_health:",
-      "    enabled: #{yaml_value(run_health_enabled)}",
-      "    quiet_after_ms: #{yaml_value(run_health_quiet_after_ms)}",
-      "    suspect_after_ms: #{yaml_value(run_health_suspect_after_ms)}",
-      "    self_report_timeout_ms: #{yaml_value(run_health_self_report_timeout_ms)}",
-      "    early_retry_on_self_report_failure: #{yaml_value(run_health_early_retry_on_self_report_failure)}",
-      "    min_token_progress_delta: #{yaml_value(run_health_min_token_progress_delta)}",
-      "    repeated_event_suspect_count: #{yaml_value(run_health_repeated_event_suspect_count)}"
+      "    enabled: #{yaml_value(enabled)}",
+      "    quiet_after_ms: #{yaml_value(quiet_after_ms)}",
+      "    suspect_after_ms: #{yaml_value(suspect_after_ms)}",
+      "    self_report_timeout_ms: #{yaml_value(self_report_timeout_ms)}",
+      "    early_retry_on_self_report_failure: #{yaml_value(early_retry_on_self_report_failure)}",
+      "    min_token_progress_delta: #{yaml_value(min_token_progress_delta)}",
+      "    repeated_event_suspect_count: #{yaml_value(repeated_event_suspect_count)}"
     ]
     |> Enum.join("\n")
   end
