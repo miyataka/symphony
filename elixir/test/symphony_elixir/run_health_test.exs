@@ -112,6 +112,50 @@ defmodule SymphonyElixir.RunHealthTest do
     assert health.next_action == :retrying_soon
   end
 
+  test "expired self-report with token progress is active" do
+    now = DateTime.utc_now()
+    progress_at = DateTime.add(now, -700, :second)
+
+    health =
+      RunHealth.evaluate(
+        entry(
+          last_meaningful_progress_at: progress_at,
+          self_report_deadline_at: DateTime.add(now, -60, :second),
+          self_report_state: :requested,
+          codex_total_tokens: 1_000,
+          health_last_progress_total_tokens: 100
+        ),
+        now,
+        config()
+      )
+
+    assert health.status == :active
+    assert health.reason == :token_progress
+    assert health.next_action == :watching
+  end
+
+  test "expired self-report with turn progress is active" do
+    now = DateTime.utc_now()
+    progress_at = DateTime.add(now, -700, :second)
+
+    health =
+      RunHealth.evaluate(
+        entry(
+          last_meaningful_progress_at: progress_at,
+          self_report_deadline_at: DateTime.add(now, -60, :second),
+          self_report_state: :requested,
+          turn_count: 2,
+          health_last_progress_turn_count: 1
+        ),
+        now,
+        config()
+      )
+
+    assert health.status == :active
+    assert health.reason == :turn_progress
+    assert health.next_action == :watching
+  end
+
   test "large token increase counts as meaningful progress" do
     now = DateTime.utc_now()
     progress_at = DateTime.add(now, -700, :second)
@@ -179,6 +223,43 @@ defmodule SymphonyElixir.RunHealthTest do
     assert health.reason == :no_meaningful_progress
   end
 
+  test "nil numeric counters do not crash classification" do
+    now = DateTime.utc_now()
+
+    health =
+      RunHealth.evaluate(
+        entry(
+          codex_total_tokens: nil,
+          health_last_progress_total_tokens: nil,
+          turn_count: nil,
+          health_last_progress_turn_count: nil,
+          repeated_event_count: nil,
+          self_report_attempts: nil,
+          last_meaningful_progress_at: now
+        ),
+        now,
+        config()
+      )
+
+    assert health.status == :active
+    assert health.reason == :recent_progress
+  end
+
+  test "sparse config map uses plan defaults" do
+    now = DateTime.utc_now()
+    progress_at = DateTime.add(now, -700, :second)
+
+    health =
+      RunHealth.evaluate(
+        entry(last_meaningful_progress_at: progress_at),
+        now,
+        %{enabled: true}
+      )
+
+    assert health.status == :suspect
+    assert health.reason == :no_meaningful_progress
+  end
+
   test "event_signature returns compact stable signatures" do
     assert RunHealth.event_signature(entry(last_codex_event: :session_started)) == "session_started"
 
@@ -197,5 +278,25 @@ defmodule SymphonyElixir.RunHealthTest do
            )
 
     refute RunHealth.meaningful_progress?(entry(), config())
+  end
+
+  test "zero token progress threshold still requires positive token delta" do
+    now = DateTime.utc_now()
+    progress_at = DateTime.add(now, -700, :second)
+
+    health =
+      RunHealth.evaluate(
+        entry(
+          last_meaningful_progress_at: progress_at,
+          codex_total_tokens: 100,
+          health_last_progress_total_tokens: 100
+        ),
+        now,
+        config(min_token_progress_delta: 0)
+      )
+
+    assert health.status == :suspect
+    assert health.reason == :no_meaningful_progress
+    refute RunHealth.meaningful_progress?(entry(), config(min_token_progress_delta: 0))
   end
 end

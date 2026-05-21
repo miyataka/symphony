@@ -14,6 +14,16 @@ defmodule SymphonyElixir.RunHealth do
           details: map()
         }
 
+  @default_config %{
+    enabled: true,
+    quiet_after_ms: 300_000,
+    suspect_after_ms: 600_000,
+    self_report_timeout_ms: 120_000,
+    early_retry_on_self_report_failure: true,
+    min_token_progress_delta: 500,
+    repeated_event_suspect_count: 10
+  }
+
   @spec evaluate(map() | struct(), DateTime.t(), map() | struct()) :: health()
   def evaluate(running_entry, now, config) do
     last_meaningful_progress_at = get(running_entry, :last_meaningful_progress_at)
@@ -22,12 +32,6 @@ defmodule SymphonyElixir.RunHealth do
     cond do
       not config_enabled?(config) ->
         health(:active, :disabled, :watching, last_meaningful_progress_at, idle_ms, %{})
-
-      self_report_missing?(running_entry, now) ->
-        health(:stalled, :self_report_missing, :retrying_soon, last_meaningful_progress_at, idle_ms, %{
-          self_report_deadline_at: get(running_entry, :self_report_deadline_at),
-          self_report_attempts: get(running_entry, :self_report_attempts, 0)
-        })
 
       token_progress?(running_entry, config) ->
         health(:active, :token_progress, :watching, now, 0, %{
@@ -39,24 +43,30 @@ defmodule SymphonyElixir.RunHealth do
           turn_delta: turn_delta(running_entry)
         })
 
-      repeated_same_event?(running_entry, config) ->
-        health(:suspect, :repeated_same_event, :requesting_self_report, last_meaningful_progress_at, idle_ms, %{
-          repeated_event_count: get(running_entry, :repeated_event_count, 0),
-          repeated_event_suspect_count: get(config, :repeated_event_suspect_count)
+      self_report_missing?(running_entry, now) ->
+        health(:stalled, :self_report_missing, :retrying_soon, last_meaningful_progress_at, idle_ms, %{
+          self_report_deadline_at: get(running_entry, :self_report_deadline_at),
+          self_report_attempts: integer(running_entry, :self_report_attempts)
         })
 
-      idle_ms == nil or idle_ms < get(config, :quiet_after_ms) ->
+      repeated_same_event?(running_entry, config) ->
+        health(:suspect, :repeated_same_event, :requesting_self_report, last_meaningful_progress_at, idle_ms, %{
+          repeated_event_count: integer(running_entry, :repeated_event_count),
+          repeated_event_suspect_count: config_integer(config, :repeated_event_suspect_count)
+        })
+
+      idle_ms == nil or idle_ms < config_integer(config, :quiet_after_ms) ->
         health(:active, :recent_progress, :watching, last_meaningful_progress_at, idle_ms, %{})
 
-      idle_ms < get(config, :suspect_after_ms) ->
+      idle_ms < config_integer(config, :suspect_after_ms) ->
         health(:quiet, :quiet, :watching, last_meaningful_progress_at, idle_ms, %{
-          quiet_after_ms: get(config, :quiet_after_ms),
-          suspect_after_ms: get(config, :suspect_after_ms)
+          quiet_after_ms: config_integer(config, :quiet_after_ms),
+          suspect_after_ms: config_integer(config, :suspect_after_ms)
         })
 
       true ->
         health(:suspect, :no_meaningful_progress, :requesting_self_report, last_meaningful_progress_at, idle_ms, %{
-          suspect_after_ms: get(config, :suspect_after_ms)
+          suspect_after_ms: config_integer(config, :suspect_after_ms)
         })
     end
   end
@@ -106,23 +116,25 @@ defmodule SymphonyElixir.RunHealth do
   defp deadline_passed?(_deadline, _now), do: false
 
   defp token_progress?(entry, config) do
-    token_delta(entry) >= get(config, :min_token_progress_delta, 0)
+    delta = token_delta(entry)
+
+    delta > 0 and delta >= config_integer(config, :min_token_progress_delta)
   end
 
   defp token_delta(entry) do
-    get(entry, :codex_total_tokens, 0) - get(entry, :health_last_progress_total_tokens, 0)
+    integer(entry, :codex_total_tokens) - integer(entry, :health_last_progress_total_tokens)
   end
 
   defp turn_progress?(entry) do
-    get(entry, :turn_count, 0) > get(entry, :health_last_progress_turn_count, 0)
+    integer(entry, :turn_count) > integer(entry, :health_last_progress_turn_count)
   end
 
   defp turn_delta(entry) do
-    get(entry, :turn_count, 0) - get(entry, :health_last_progress_turn_count, 0)
+    integer(entry, :turn_count) - integer(entry, :health_last_progress_turn_count)
   end
 
   defp repeated_same_event?(entry, config) do
-    get(entry, :repeated_event_count, 0) >= get(config, :repeated_event_suspect_count)
+    integer(entry, :repeated_event_count) >= config_integer(config, :repeated_event_suspect_count)
   end
 
   defp idle_ms(nil, _now), do: nil
@@ -141,10 +153,29 @@ defmodule SymphonyElixir.RunHealth do
   defp normalize_part(value) when is_binary(value), do: value
   defp normalize_part(value), do: inspect(value)
 
+  defp integer(map_or_struct, key) do
+    case get(map_or_struct, key) do
+      value when is_integer(value) -> value
+      _value -> 0
+    end
+  end
+
+  defp config_integer(config, key) do
+    case get(config, key, Map.fetch!(@default_config, key)) do
+      value when is_integer(value) -> value
+      _value -> Map.fetch!(@default_config, key)
+    end
+  end
+
   defp get(map_or_struct, key, default \\ nil)
 
   defp get(map_or_struct, key, default) when is_map(map_or_struct) do
-    Map.get(map_or_struct, key, Map.get(map_or_struct, Atom.to_string(key), default))
+    map_or_struct
+    |> Map.get(key, Map.get(map_or_struct, Atom.to_string(key), default))
+    |> case do
+      nil -> default
+      value -> value
+    end
   end
 
   defp get(_map_or_struct, _key, default), do: default
