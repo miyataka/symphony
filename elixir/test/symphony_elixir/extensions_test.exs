@@ -704,6 +704,20 @@ defmodule SymphonyElixir.ExtensionsTest do
                "health",
                "bad <!-- symphony:health:start --> marker"
              )
+
+    assert {:error, :invalid_workpad_section_markdown} =
+             Adapter.upsert_workpad_section(
+               "issue-1",
+               "health",
+               "bad <!-- symphony:other:start --> marker"
+             )
+
+    assert {:error, :invalid_workpad_section_markdown} =
+             Adapter.upsert_workpad_section(
+               "issue-1",
+               "health",
+               "bad <!-- symphony:bad --> marker"
+             )
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do

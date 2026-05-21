@@ -239,11 +239,8 @@ defmodule SymphonyElixir.Linear.Adapter do
     end
   end
 
-  defp validate_section_markdown(section_key, markdown) do
-    start_marker = marker(section_key, "start")
-    end_marker = marker(section_key, "end")
-
-    if String.contains?(markdown, [start_marker, end_marker]) do
+  defp validate_section_markdown(_section_key, markdown) do
+    if String.contains?(markdown, "<!-- symphony:") do
       {:error, :invalid_workpad_section_markdown}
     else
       :ok
