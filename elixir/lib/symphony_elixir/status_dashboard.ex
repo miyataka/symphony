@@ -19,7 +19,7 @@ defmodule SymphonyElixir.StatusDashboard do
   @running_stage_width 14
   @running_pid_width 8
   @running_age_width 12
-  @running_health_width 24
+  @running_health_width 12
   @running_tokens_width 10
   @running_session_width 14
   @running_event_default_width 44
@@ -641,18 +641,21 @@ defmodule SymphonyElixir.StatusDashboard do
   def format_running_summary_for_test(running_entry, terminal_columns \\ nil),
     do: format_running_summary(running_entry, running_event_width(terminal_columns))
 
-  defp format_health_summary(%{health: %{status: status, reason: reason, idle_ms: idle_ms}}) do
-    "#{humanize_health_status(status)} #{format_health_idle(idle_ms)} #{format_health_reason(reason)}"
+  defp format_health_summary(%{health: %{status: status, idle_ms: idle_ms}}) do
+    "#{compact_health_status(status)} #{format_health_idle(idle_ms)}"
     |> String.trim()
   end
 
   defp format_health_summary(_entry), do: "Health n/a"
 
-  defp humanize_health_status(status) do
-    status
-    |> to_string()
-    |> String.replace("_", " ")
-    |> String.capitalize()
+  defp compact_health_status(status) do
+    case status |> to_string() |> String.downcase() do
+      "active" -> "Act"
+      "quiet" -> "Q"
+      "suspect" -> "Sus"
+      "stalled" -> "Stl"
+      other -> other |> String.slice(0, 3) |> String.capitalize()
+    end
   end
 
   defp format_health_idle(idle_ms) when is_integer(idle_ms) and idle_ms < 60_000 do
@@ -668,23 +671,6 @@ defmodule SymphonyElixir.StatusDashboard do
   end
 
   defp format_health_idle(_idle_ms), do: ""
-
-  defp format_health_reason(:no_meaningful_progress), do: "no progress"
-  defp format_health_reason("no_meaningful_progress"), do: "no progress"
-  defp format_health_reason(:self_report_overdue), do: "report overdue"
-  defp format_health_reason("self_report_overdue"), do: "report overdue"
-  defp format_health_reason(:recent_progress), do: "recent"
-  defp format_health_reason("recent_progress"), do: "recent"
-  defp format_health_reason(:turn_progress), do: "turn progress"
-  defp format_health_reason("turn_progress"), do: "turn progress"
-
-  defp format_health_reason(reason) when not is_nil(reason) do
-    reason
-    |> to_string()
-    |> String.replace("_", " ")
-  end
-
-  defp format_health_reason(_reason), do: ""
 
   defp health_color(%{status: status}) do
     case status |> to_string() |> String.downcase() do

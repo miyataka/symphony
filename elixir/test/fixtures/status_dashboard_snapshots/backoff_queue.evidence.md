@@ -9,9 +9,9 @@
 │ Next refresh: n/a
 ├─ Running
 │
-│   ID       STAGE          PID      AGE / TURN   HEALTH                   TOKENS     SESSION        EVENT         
+│   ID       STAGE          PID      AGE / TURN   HEALTH       TOKENS     SESSION        EVENT                     
 │   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
-│ ● MT-638   retrying       4242     20m 25s / 7  Stalled 10m report ov...     14,200 thre...567890  agent messa...
+│ ● MT-638   retrying       4242     20m 25s / 7  Stl 10m          14,200 thre...567890  agent message streaming...
 │
 ├─ Backoff queue
 │

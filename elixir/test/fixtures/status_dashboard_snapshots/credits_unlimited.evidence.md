@@ -9,9 +9,9 @@
 │ Next refresh: n/a
 ├─ Running
 │
-│   ID       STAGE          PID      AGE / TURN   HEALTH                   TOKENS     SESSION        EVENT         
+│   ID       STAGE          PID      AGE / TURN   HEALTH       TOKENS     SESSION        EVENT                     
 │   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
-│ ● MT-777   running        4242     1m 15s / 7   Health n/a                    3,200 thre...567890  thread toke...
+│ ● MT-777   running        4242     1m 15s / 7   Health n/a        3,200 thre...567890  thread token usage upda...
 │
 ├─ Backoff queue
 │

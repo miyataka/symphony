@@ -9,7 +9,7 @@
 │ Next refresh: n/a
 ├─ Running
 │
-│   ID       STAGE          PID      AGE / TURN   HEALTH                   TOKENS     SESSION        EVENT         
+│   ID       STAGE          PID      AGE / TURN   HEALTH       TOKENS     SESSION        EVENT                     
 │   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
 │  No active agents
 │
