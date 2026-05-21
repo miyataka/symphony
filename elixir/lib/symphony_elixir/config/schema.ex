@@ -221,6 +221,46 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule RunHealth do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:enabled, :boolean, default: true)
+      field(:quiet_after_ms, :integer, default: 300_000)
+      field(:suspect_after_ms, :integer, default: 600_000)
+      field(:self_report_timeout_ms, :integer, default: 120_000)
+      field(:early_retry_on_self_report_failure, :boolean, default: true)
+      field(:min_token_progress_delta, :integer, default: 500)
+      field(:repeated_event_suspect_count, :integer, default: 10)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(
+        attrs,
+        [
+          :enabled,
+          :quiet_after_ms,
+          :suspect_after_ms,
+          :self_report_timeout_ms,
+          :early_retry_on_self_report_failure,
+          :min_token_progress_delta,
+          :repeated_event_suspect_count
+        ],
+        empty_values: []
+      )
+      |> validate_number(:quiet_after_ms, greater_than: 0)
+      |> validate_number(:suspect_after_ms, greater_than: 0)
+      |> validate_number(:self_report_timeout_ms, greater_than: 0)
+      |> validate_number(:min_token_progress_delta, greater_than_or_equal_to: 0)
+      |> validate_number(:repeated_event_suspect_count, greater_than: 0)
+    end
+  end
+
   defmodule Observability do
     @moduledoc false
     use Ecto.Schema
@@ -231,12 +271,14 @@ defmodule SymphonyElixir.Config.Schema do
       field(:dashboard_enabled, :boolean, default: true)
       field(:refresh_ms, :integer, default: 1_000)
       field(:render_interval_ms, :integer, default: 16)
+      embeds_one(:run_health, RunHealth, on_replace: :update, defaults_to_struct: true)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
       |> cast(attrs, [:dashboard_enabled, :refresh_ms, :render_interval_ms], empty_values: [])
+      |> cast_embed(:run_health, with: &RunHealth.changeset/2)
       |> validate_number(:refresh_ms, greater_than: 0)
       |> validate_number(:render_interval_ms, greater_than: 0)
     end

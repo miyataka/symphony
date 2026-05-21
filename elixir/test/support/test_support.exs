@@ -149,6 +149,13 @@ defmodule SymphonyElixir.TestSupport do
           observability_enabled: true,
           observability_refresh_ms: 1_000,
           observability_render_interval_ms: 16,
+          observability_run_health_enabled: true,
+          observability_run_health_quiet_after_ms: 300_000,
+          observability_run_health_suspect_after_ms: 600_000,
+          observability_run_health_self_report_timeout_ms: 120_000,
+          observability_run_health_early_retry_on_self_report_failure: true,
+          observability_run_health_min_token_progress_delta: 500,
+          observability_run_health_repeated_event_suspect_count: 10,
           server_port: nil,
           server_host: nil,
           prompt: @workflow_prompt
@@ -186,6 +193,22 @@ defmodule SymphonyElixir.TestSupport do
     observability_enabled = Keyword.get(config, :observability_enabled)
     observability_refresh_ms = Keyword.get(config, :observability_refresh_ms)
     observability_render_interval_ms = Keyword.get(config, :observability_render_interval_ms)
+    observability_run_health_enabled = Keyword.get(config, :observability_run_health_enabled)
+    observability_run_health_quiet_after_ms = Keyword.get(config, :observability_run_health_quiet_after_ms)
+    observability_run_health_suspect_after_ms = Keyword.get(config, :observability_run_health_suspect_after_ms)
+
+    observability_run_health_self_report_timeout_ms =
+      Keyword.get(config, :observability_run_health_self_report_timeout_ms)
+
+    observability_run_health_early_retry_on_self_report_failure =
+      Keyword.get(config, :observability_run_health_early_retry_on_self_report_failure)
+
+    observability_run_health_min_token_progress_delta =
+      Keyword.get(config, :observability_run_health_min_token_progress_delta)
+
+    observability_run_health_repeated_event_suspect_count =
+      Keyword.get(config, :observability_run_health_repeated_event_suspect_count)
+
     server_port = Keyword.get(config, :server_port)
     server_host = Keyword.get(config, :server_host)
     prompt = Keyword.get(config, :prompt)
@@ -220,7 +243,18 @@ defmodule SymphonyElixir.TestSupport do
         "  read_timeout_ms: #{yaml_value(codex_read_timeout_ms)}",
         "  stall_timeout_ms: #{yaml_value(codex_stall_timeout_ms)}",
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
-        observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
+        observability_yaml(
+          observability_enabled,
+          observability_refresh_ms,
+          observability_render_interval_ms,
+          observability_run_health_enabled,
+          observability_run_health_quiet_after_ms,
+          observability_run_health_suspect_after_ms,
+          observability_run_health_self_report_timeout_ms,
+          observability_run_health_early_retry_on_self_report_failure,
+          observability_run_health_min_token_progress_delta,
+          observability_run_health_repeated_event_suspect_count
+        ),
         server_yaml(server_port, server_host),
         "---",
         prompt
@@ -282,12 +316,31 @@ defmodule SymphonyElixir.TestSupport do
     |> Enum.join("\n")
   end
 
-  defp observability_yaml(enabled, refresh_ms, render_interval_ms) do
+  defp observability_yaml(
+         enabled,
+         refresh_ms,
+         render_interval_ms,
+         run_health_enabled,
+         run_health_quiet_after_ms,
+         run_health_suspect_after_ms,
+         run_health_self_report_timeout_ms,
+         run_health_early_retry_on_self_report_failure,
+         run_health_min_token_progress_delta,
+         run_health_repeated_event_suspect_count
+       ) do
     [
       "observability:",
       "  dashboard_enabled: #{yaml_value(enabled)}",
       "  refresh_ms: #{yaml_value(refresh_ms)}",
-      "  render_interval_ms: #{yaml_value(render_interval_ms)}"
+      "  render_interval_ms: #{yaml_value(render_interval_ms)}",
+      "  run_health:",
+      "    enabled: #{yaml_value(run_health_enabled)}",
+      "    quiet_after_ms: #{yaml_value(run_health_quiet_after_ms)}",
+      "    suspect_after_ms: #{yaml_value(run_health_suspect_after_ms)}",
+      "    self_report_timeout_ms: #{yaml_value(run_health_self_report_timeout_ms)}",
+      "    early_retry_on_self_report_failure: #{yaml_value(run_health_early_retry_on_self_report_failure)}",
+      "    min_token_progress_delta: #{yaml_value(run_health_min_token_progress_delta)}",
+      "    repeated_event_suspect_count: #{yaml_value(run_health_repeated_event_suspect_count)}"
     ]
     |> Enum.join("\n")
   end
