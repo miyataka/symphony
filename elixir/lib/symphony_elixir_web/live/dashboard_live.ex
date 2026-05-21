@@ -135,6 +135,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                   <col style="width: 8rem;" />
                   <col style="width: 7.5rem;" />
                   <col style="width: 8.5rem;" />
+                  <col style="width: 9.5rem;" />
                   <col />
                   <col style="width: 10rem;" />
                 </colgroup>
@@ -144,6 +145,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                     <th>State</th>
                     <th>Session</th>
                     <th>Runtime / turns</th>
+                    <th>Health</th>
                     <th>Codex update</th>
                     <th>Tokens</th>
                   </tr>
@@ -179,6 +181,16 @@ defmodule SymphonyElixirWeb.DashboardLive do
                       </div>
                     </td>
                     <td class="numeric"><%= format_runtime_and_turns(entry.started_at, entry.turn_count, @now) %></td>
+                    <td>
+                      <div class="health-stack">
+                        <span class={health_badge_class(entry.health && entry.health.status)}>
+                          <%= health_label(entry.health) %>
+                        </span>
+                        <span class="muted event-meta">
+                          <%= health_idle(entry.health) %> <%= health_reason(entry.health) %>
+                        </span>
+                      </div>
+                    </td>
                     <td>
                       <div class="detail-stack">
                         <span
@@ -319,6 +331,63 @@ defmodule SymphonyElixirWeb.DashboardLive do
       String.contains?(normalized, ["todo", "queued", "pending", "retry"]) -> "#{base} state-badge-warning"
       true -> base
     end
+  end
+
+  defp health_label(nil), do: "Health n/a"
+
+  defp health_label(%{status: status}) when not is_nil(status) do
+    status
+    |> to_string()
+    |> humanize_token()
+  end
+
+  defp health_label(_health), do: "Health n/a"
+
+  defp health_reason(%{reason: reason}) when not is_nil(reason) do
+    humanize_token(reason)
+  end
+
+  defp health_reason(_health), do: "No health signal"
+
+  defp health_idle(%{idle_ms: idle_ms}) when is_integer(idle_ms) do
+    "#{format_idle_ms(idle_ms)} idle"
+  end
+
+  defp health_idle(_health), do: "idle n/a"
+
+  defp health_badge_class(status) do
+    base = "health-badge"
+
+    case status |> to_string() |> String.downcase() do
+      "active" -> "#{base} health-badge-active"
+      "quiet" -> "#{base} health-badge-quiet"
+      "suspect" -> "#{base} health-badge-suspect"
+      "stalled" -> "#{base} health-badge-stalled"
+      _ -> base
+    end
+  end
+
+  defp format_idle_ms(idle_ms) when idle_ms < 60_000 do
+    "#{div(max(idle_ms, 0), 1_000)}s"
+  end
+
+  defp format_idle_ms(idle_ms) when idle_ms < 3_600_000 do
+    mins = div(idle_ms, 60_000)
+    secs = div(rem(idle_ms, 60_000), 1_000)
+    "#{mins}m #{secs}s"
+  end
+
+  defp format_idle_ms(idle_ms) do
+    hours = div(idle_ms, 3_600_000)
+    mins = div(rem(idle_ms, 3_600_000), 60_000)
+    "#{hours}h #{mins}m"
+  end
+
+  defp humanize_token(value) do
+    value
+    |> to_string()
+    |> String.replace("_", " ")
+    |> String.capitalize()
   end
 
   defp schedule_runtime_tick do

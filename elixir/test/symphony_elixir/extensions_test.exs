@@ -352,6 +352,17 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "workspace_path" => nil,
                  "session_id" => "thread-http",
                  "turn_count" => 7,
+                 "health" => %{
+                   "status" => "suspect",
+                   "reason" => "no_meaningful_progress",
+                   "next_action" => "requesting_self_report",
+                   "last_meaningful_progress_at" => "2026-02-15T21:36:38Z",
+                   "idle_ms" => 125_000,
+                   "details" => %{
+                     "last_event" => "notification",
+                     "deadline_at" => "2026-02-15T21:37:38Z"
+                   }
+                 },
                  "last_event" => "notification",
                  "last_message" => "rendered",
                  "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
@@ -386,6 +397,17 @@ defmodule SymphonyElixir.ExtensionsTest do
              "issue_identifier" => "MT-HTTP",
              "issue_id" => "issue-http",
              "status" => "running",
+             "health" => %{
+               "status" => "suspect",
+               "reason" => "no_meaningful_progress",
+               "next_action" => "requesting_self_report",
+               "last_meaningful_progress_at" => "2026-02-15T21:36:38Z",
+               "idle_ms" => 125_000,
+               "details" => %{
+                 "last_event" => "notification",
+                 "deadline_at" => "2026-02-15T21:37:38Z"
+               }
+             },
              "workspace" => %{
                "path" => Path.join(Config.settings!().workspace.root, "MT-HTTP"),
                "host" => nil
@@ -396,6 +418,17 @@ defmodule SymphonyElixir.ExtensionsTest do
                "workspace_path" => nil,
                "session_id" => "thread-http",
                "turn_count" => 7,
+               "health" => %{
+                 "status" => "suspect",
+                 "reason" => "no_meaningful_progress",
+                 "next_action" => "requesting_self_report",
+                 "last_meaningful_progress_at" => "2026-02-15T21:36:38Z",
+                 "idle_ms" => 125_000,
+                 "details" => %{
+                   "last_event" => "notification",
+                   "deadline_at" => "2026-02-15T21:37:38Z"
+                 }
+               },
                "state" => "In Progress",
                "started_at" => issue_payload["running"]["started_at"],
                "last_event" => "notification",
@@ -548,6 +581,10 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Offline"
     assert html =~ "Copy ID"
     assert html =~ "Codex update"
+    assert html =~ "Health"
+    assert html =~ "Suspect"
+    assert html =~ "2m 5s idle"
+    assert html =~ "No meaningful progress"
     refute html =~ "data-runtime-clock="
     refute html =~ "setInterval(refreshRuntimeClocks"
     refute html =~ "Refresh now"
@@ -699,6 +736,17 @@ defmodule SymphonyElixir.ExtensionsTest do
           codex_input_tokens: 4,
           codex_output_tokens: 8,
           codex_total_tokens: 12,
+          health: %{
+            status: :suspect,
+            reason: :no_meaningful_progress,
+            next_action: :requesting_self_report,
+            last_meaningful_progress_at: ~U[2026-02-15 21:36:38Z],
+            idle_ms: 125_000,
+            details: %{
+              last_event: :notification,
+              deadline_at: ~U[2026-02-15 21:37:38Z]
+            }
+          },
           started_at: DateTime.utc_now()
         }
       ],
