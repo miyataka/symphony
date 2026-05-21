@@ -101,6 +101,148 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
            }
   end
 
+  test "orchestrator snapshot includes run health" do
+    issue_id = "issue-health-snapshot"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-HEALTH",
+      title: "Health",
+      state: "In Progress"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :HealthSnapshotOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    now = DateTime.utc_now()
+    stale_progress = DateTime.add(now, -700, :second)
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: "thread-health-turn-health",
+      turn_count: 1,
+      last_codex_message: %{event: :notification, message: %{}, timestamp: stale_progress},
+      last_codex_timestamp: stale_progress,
+      last_codex_event: :notification,
+      last_meaningful_progress_at: stale_progress,
+      last_progress_signature: "notification",
+      repeated_event_count: 0,
+      codex_app_server_pid: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      health_last_progress_total_tokens: 0,
+      health_last_progress_turn_count: 1,
+      self_report_requested_at: nil,
+      self_report_deadline_at: nil,
+      self_report_attempts: 0,
+      self_report_state: nil,
+      started_at: stale_progress
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    snapshot = GenServer.call(pid, :snapshot)
+    assert %{running: [entry]} = snapshot
+    assert entry.health.status == :suspect
+    assert entry.health.reason == :no_meaningful_progress
+    assert entry.health.next_action == :requesting_self_report
+    assert entry.last_meaningful_progress_at == stale_progress
+    assert entry.repeated_event_count == 0
+    assert is_integer(entry.health.idle_ms)
+  end
+
+  test "orchestrator codex updates refresh health progress metadata" do
+    issue_id = "issue-health-update"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-HUP",
+      title: "Health update",
+      state: "In Progress"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :HealthUpdateOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    started_at = DateTime.utc_now()
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: nil,
+      turn_count: 0,
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      last_meaningful_progress_at: started_at,
+      last_progress_signature: nil,
+      repeated_event_count: 0,
+      codex_app_server_pid: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      codex_last_reported_input_tokens: 0,
+      codex_last_reported_output_tokens: 0,
+      codex_last_reported_total_tokens: 0,
+      health_last_progress_total_tokens: 0,
+      health_last_progress_turn_count: 0,
+      self_report_requested_at: nil,
+      self_report_deadline_at: nil,
+      self_report_attempts: 0,
+      self_report_state: nil,
+      started_at: started_at
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    now = DateTime.utc_now()
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id, %{event: :session_started, session_id: "thread-hup-turn-hup", timestamp: now}}
+    )
+
+    snapshot =
+      wait_for_snapshot(pid, fn
+        %{running: [%{last_meaningful_progress_at: ^now}]} -> true
+        _snapshot -> false
+      end)
+
+    assert %{running: [entry]} = snapshot
+    assert entry.health.status == :active
+    assert entry.health.reason in [:recent_progress, :turn_progress]
+    assert entry.last_meaningful_progress_at == now
+    assert entry.repeated_event_count == 0
+  end
+
   test "orchestrator snapshot tracks codex thread totals and app-server pid" do
     issue_id = "issue-usage-snapshot"
 

@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, Config, RunHealth, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Linear.Issue
 
   @continuation_retry_delay_ms 1_000
@@ -696,6 +696,7 @@ defmodule SymphonyElixir.Orchestrator do
          end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
+        now = DateTime.utc_now()
 
         Logger.info("Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"}")
 
@@ -719,8 +720,21 @@ defmodule SymphonyElixir.Orchestrator do
             codex_last_reported_output_tokens: 0,
             codex_last_reported_total_tokens: 0,
             turn_count: 0,
+            last_meaningful_progress_at: now,
+            last_progress_signature: nil,
+            repeated_event_count: 0,
+            health_status: :active,
+            health_reason: :recent_progress,
+            health_next_action: :watching,
+            health_last_progress_total_tokens: 0,
+            health_last_progress_turn_count: 0,
+            self_report_requested_at: nil,
+            self_report_deadline_at: nil,
+            self_report_attempts: 0,
+            self_report_state: nil,
+            health_workpad_warning_written?: false,
             retry_attempt: normalize_retry_attempt(attempt),
-            started_at: DateTime.utc_now()
+            started_at: now
           })
 
         %{
@@ -1106,6 +1120,8 @@ defmodule SymphonyElixir.Orchestrator do
     running =
       state.running
       |> Enum.map(fn {issue_id, metadata} ->
+        health = RunHealth.evaluate(metadata, now, Config.settings!().observability.run_health)
+
         %{
           issue_id: issue_id,
           identifier: metadata.identifier,
@@ -1122,6 +1138,9 @@ defmodule SymphonyElixir.Orchestrator do
           last_codex_timestamp: metadata.last_codex_timestamp,
           last_codex_message: metadata.last_codex_message,
           last_codex_event: metadata.last_codex_event,
+          health: health,
+          last_meaningful_progress_at: Map.get(metadata, :last_meaningful_progress_at),
+          repeated_event_count: Map.get(metadata, :repeated_event_count, 0),
           runtime_seconds: running_seconds(metadata.started_at, now)
         }
       end)
@@ -1180,8 +1199,9 @@ defmodule SymphonyElixir.Orchestrator do
     last_reported_total = Map.get(running_entry, :codex_last_reported_total_tokens, 0)
     turn_count = Map.get(running_entry, :turn_count, 0)
 
-    {
-      Map.merge(running_entry, %{
+    updated_running_entry =
+      running_entry
+      |> Map.merge(%{
         last_codex_timestamp: timestamp,
         last_codex_message: summarize_codex_update(update),
         session_id: session_id_for_update(running_entry.session_id, update),
@@ -1194,9 +1214,48 @@ defmodule SymphonyElixir.Orchestrator do
         codex_last_reported_output_tokens: max(last_reported_output, token_delta.output_reported),
         codex_last_reported_total_tokens: max(last_reported_total, token_delta.total_reported),
         turn_count: turn_count_for_update(turn_count, running_entry.session_id, update)
-      }),
-      token_delta
-    }
+      })
+      |> update_run_health_progress(update)
+      |> evaluate_run_health(DateTime.utc_now())
+
+    {updated_running_entry, token_delta}
+  end
+
+  defp update_run_health_progress(running_entry, %{timestamp: %DateTime{} = timestamp}) do
+    config = Config.settings!().observability.run_health
+    signature = RunHealth.event_signature(running_entry)
+
+    if RunHealth.meaningful_progress?(running_entry, config) do
+      Map.merge(running_entry, %{
+        last_meaningful_progress_at: timestamp,
+        last_progress_signature: signature,
+        repeated_event_count: 0,
+        health_last_progress_total_tokens: Map.get(running_entry, :codex_total_tokens, 0),
+        health_last_progress_turn_count: Map.get(running_entry, :turn_count, 0)
+      })
+    else
+      repeated_event_count =
+        if Map.get(running_entry, :last_progress_signature) == signature do
+          Map.get(running_entry, :repeated_event_count, 0) + 1
+        else
+          1
+        end
+
+      Map.merge(running_entry, %{
+        last_progress_signature: signature,
+        repeated_event_count: repeated_event_count
+      })
+    end
+  end
+
+  defp evaluate_run_health(running_entry, %DateTime{} = now) do
+    health = RunHealth.evaluate(running_entry, now, Config.settings!().observability.run_health)
+
+    Map.merge(running_entry, %{
+      health_status: health.status,
+      health_reason: health.reason,
+      health_next_action: health.next_action
+    })
   end
 
   defp codex_app_server_pid_for_update(_existing, %{codex_app_server_pid: pid})
