@@ -448,19 +448,136 @@ defmodule SymphonyElixir.Orchestrator do
   defp reconcile_stalled_running_issues(%State{} = state) do
     timeout_ms = Config.settings!().codex.stall_timeout_ms
 
-    cond do
-      timeout_ms <= 0 ->
-        state
+    if map_size(state.running) == 0 do
+      state
+    else
+      now = DateTime.utc_now()
 
-      map_size(state.running) == 0 ->
-        state
+      Enum.reduce(state.running, state, fn {issue_id, running_entry}, state_acc ->
+        running_entry = evaluate_run_health(running_entry, now)
 
-      true ->
-        now = DateTime.utc_now()
+        state_acc
+        |> put_running_entry(issue_id, running_entry)
+        |> handle_run_health_action(issue_id, running_entry, now)
+        |> maybe_restart_hard_stalled_issue(issue_id, now, timeout_ms)
+      end)
+    end
+  end
 
-        Enum.reduce(state.running, state, fn {issue_id, running_entry}, state_acc ->
-          restart_stalled_issue(state_acc, issue_id, running_entry, now, timeout_ms)
-        end)
+  defp put_running_entry(%State{} = state, issue_id, running_entry) do
+    %{state | running: Map.put(state.running, issue_id, running_entry)}
+  end
+
+  defp handle_run_health_action(%State{} = state, issue_id, %{health_status: :stalled} = running_entry, _now) do
+    config = Config.settings!().observability.run_health
+
+    if config.early_retry_on_self_report_failure do
+      restart_self_report_stalled_issue(state, issue_id, running_entry)
+    else
+      state
+    end
+  end
+
+  defp handle_run_health_action(%State{} = state, issue_id, %{health_status: :suspect} = running_entry, now) do
+    maybe_request_self_report(state, issue_id, running_entry, now)
+  end
+
+  defp handle_run_health_action(%State{} = state, _issue_id, _running_entry, _now), do: state
+
+  defp maybe_request_self_report(%State{} = state, issue_id, running_entry, now) do
+    if Map.get(running_entry, :self_report_state) == :requested do
+      state
+    else
+      config = Config.settings!().observability.run_health
+      deadline = DateTime.add(now, config.self_report_timeout_ms, :millisecond)
+      payload = self_report_payload(issue_id, running_entry, deadline)
+
+      deliver_self_report_request(Map.get(running_entry, :pid), payload)
+      write_run_health_warning(issue_id, running_entry, "Requested agent self-report", deadline)
+
+      updated =
+        running_entry
+        |> Map.put(:self_report_state, :requested)
+        |> Map.put(:self_report_requested_at, now)
+        |> Map.put(:self_report_deadline_at, deadline)
+        |> Map.update(:self_report_attempts, 1, &(&1 + 1))
+        |> Map.put(:health_next_action, :requesting_self_report)
+
+      put_running_entry(state, issue_id, updated)
+    end
+  end
+
+  defp self_report_payload(issue_id, running_entry, deadline) do
+    %{
+      issue_id: issue_id,
+      issue_identifier: Map.get(running_entry, :identifier),
+      reason: Map.get(running_entry, :health_reason),
+      last_meaningful_progress_at: Map.get(running_entry, :last_meaningful_progress_at),
+      deadline_at: deadline
+    }
+  end
+
+  defp deliver_self_report_request(pid, payload) when is_pid(pid) do
+    send(pid, {:symphony_control, :request_self_report, payload})
+    :ok
+  end
+
+  defp deliver_self_report_request(_pid, _payload), do: :ok
+
+  defp restart_self_report_stalled_issue(%State{} = state, issue_id, running_entry) do
+    identifier = Map.get(running_entry, :identifier, issue_id)
+    reason = Map.get(running_entry, :health_reason, :self_report_missing)
+
+    write_run_health_warning(
+      issue_id,
+      running_entry,
+      "Self-report missing; retrying early",
+      Map.get(running_entry, :self_report_deadline_at)
+    )
+
+    state
+    |> terminate_running_issue(issue_id, false)
+    |> schedule_issue_retry(issue_id, next_retry_attempt_from_running(running_entry), %{
+      identifier: identifier,
+      error: "self-report missing after suspect run health: #{reason}",
+      worker_host: Map.get(running_entry, :worker_host),
+      workspace_path: Map.get(running_entry, :workspace_path)
+    })
+  end
+
+  defp write_run_health_warning(issue_id, running_entry, action, deadline) do
+    markdown = """
+    ### Run Health Warning
+
+    - Status: #{human_health(Map.get(running_entry, :health_status))}
+    - Reason: #{Map.get(running_entry, :health_reason)}
+    - Last meaningful progress: #{iso8601(Map.get(running_entry, :last_meaningful_progress_at))}
+    - Action: #{action}
+    - Retry policy: Will retry early if no useful report arrives by #{iso8601(deadline)}
+    """
+
+    case Tracker.upsert_workpad_section(issue_id, "run-health-warning", markdown) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to update run health Workpad warning for issue_id=#{issue_id}: #{inspect(reason)}")
+    end
+  end
+
+  defp human_health(value), do: value |> to_string() |> String.capitalize()
+
+  defp iso8601(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
+  defp iso8601(_value), do: "n/a"
+
+  defp maybe_restart_hard_stalled_issue(%State{} = state, _issue_id, _now, timeout_ms)
+       when not is_integer(timeout_ms) or timeout_ms <= 0,
+       do: state
+
+  defp maybe_restart_hard_stalled_issue(%State{} = state, issue_id, now, timeout_ms) do
+    case Map.get(state.running, issue_id) do
+      nil -> state
+      running_entry -> restart_stalled_issue(state, issue_id, running_entry, now, timeout_ms)
     end
   end
 

@@ -90,7 +90,9 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp do_run_codex_turns(app_session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
+    opts = collect_control_messages(opts)
     prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
+    next_opts = Keyword.delete(opts, :pending_self_reports)
 
     with {:ok, turn_session} <-
            AppServer.run_turn(
@@ -110,7 +112,7 @@ defmodule SymphonyElixir.AgentRunner do
             workspace,
             refreshed_issue,
             codex_update_recipient,
-            opts,
+            next_opts,
             issue_state_fetcher,
             turn_number + 1,
             max_turns
@@ -130,9 +132,22 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
+  defp collect_control_messages(opts) do
+    receive do
+      {:symphony_control, :request_self_report, payload} ->
+        pending = Keyword.get(opts, :pending_self_reports, [])
+        collect_control_messages(Keyword.put(opts, :pending_self_reports, pending ++ [payload]))
+    after
+      0 ->
+        opts
+    end
+  end
+
   defp build_turn_prompt(issue, opts, 1, _max_turns), do: PromptBuilder.build_prompt(issue, opts)
 
-  defp build_turn_prompt(_issue, _opts, turn_number, max_turns) do
+  defp build_turn_prompt(_issue, opts, turn_number, max_turns) do
+    self_report_guidance = pending_self_report_guidance(Keyword.get(opts, :pending_self_reports, []))
+
     """
     Continuation guidance:
 
@@ -141,6 +156,22 @@ defmodule SymphonyElixir.AgentRunner do
     - Resume from the current workspace and workpad state instead of restarting from scratch.
     - The original task instructions and prior turn context are already present in this thread, so do not restate them before acting.
     - Focus on the remaining ticket work and do not end the turn while the issue stays active unless you are truly blocked.
+    #{self_report_guidance}
+    """
+  end
+
+  defp pending_self_report_guidance([]), do: ""
+
+  defp pending_self_report_guidance(reports) when is_list(reports) do
+    latest = List.last(reports)
+
+    """
+
+    Run health self-report request:
+
+    - Symphony marked this run as suspicious because #{latest[:reason]}.
+    - Briefly report current status, what changed since the last visible progress, what is taking time, and what you will do next.
+    - Do not create extra Linear comments; Symphony owns the run-health Workpad warning.
     """
   end
 

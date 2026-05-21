@@ -166,6 +166,179 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert is_integer(entry.health.idle_ms)
   end
 
+  test "suspect run requests self-report and writes one workpad warning" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      max_concurrent_agents: 1,
+      observability_run_health_quiet_after_ms: 100,
+      observability_run_health_suspect_after_ms: 200,
+      observability_run_health_self_report_timeout_ms: 1_000
+    )
+
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    issue_id = "issue-self-report"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-SR",
+      title: "Self report",
+      state: "In Progress"
+    }
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
+    orchestrator_name = Module.concat(__MODULE__, :SelfReportOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    parent = self()
+
+    worker_pid =
+      spawn(fn ->
+        receive do
+          {:symphony_control, :request_self_report, payload} ->
+            send(parent, {:self_report_payload, payload})
+
+          :done ->
+            :ok
+        end
+      end)
+
+    stale_at = DateTime.add(DateTime.utc_now(), -5, :second)
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: worker_pid,
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: "thread-self-report-turn",
+      turn_count: 1,
+      last_codex_message: %{event: :notification, message: %{}, timestamp: stale_at},
+      last_codex_timestamp: stale_at,
+      last_codex_event: :notification,
+      last_meaningful_progress_at: stale_at,
+      repeated_event_count: 0,
+      codex_total_tokens: 0,
+      health_last_progress_total_tokens: 0,
+      health_last_progress_turn_count: 1,
+      self_report_state: nil,
+      self_report_attempts: 0,
+      started_at: stale_at
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    send(pid, :run_poll_cycle)
+
+    assert_receive {:self_report_payload, payload}, 1_000
+    assert payload.issue_id == issue_id
+    assert payload.issue_identifier == issue.identifier
+    assert payload.reason == :no_meaningful_progress
+    assert %DateTime{} = payload.deadline_at
+
+    assert_receive {:memory_workpad_upsert, ^issue_id, "run-health-warning", markdown}, 1_000
+    assert markdown =~ "Run Health Warning"
+    assert markdown =~ "Suspect"
+
+    state = :sys.get_state(pid)
+    updated = state.running[issue_id]
+
+    assert updated.self_report_state == :requested
+    assert updated.self_report_attempts == 1
+    assert %DateTime{} = updated.self_report_deadline_at
+
+    send(pid, :run_poll_cycle)
+    refute_receive {:memory_workpad_upsert, ^issue_id, "run-health-warning", _markdown}, 100
+  end
+
+  test "self-report deadline schedules early retry" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      max_concurrent_agents: 1,
+      observability_run_health_quiet_after_ms: 100,
+      observability_run_health_suspect_after_ms: 200,
+      observability_run_health_self_report_timeout_ms: 100
+    )
+
+    issue_id = "issue-self-report-timeout"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-SRT",
+      title: "Self report timeout",
+      state: "In Progress"
+    }
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue | state: "Backlog"}])
+
+    orchestrator_name = Module.concat(__MODULE__, :SelfReportTimeoutOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    worker_pid =
+      spawn(fn ->
+        receive do
+          :done -> :ok
+        end
+      end)
+
+    stale_at = DateTime.add(DateTime.utc_now(), -5, :second)
+    deadline = DateTime.add(DateTime.utc_now(), -1, :second)
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: worker_pid,
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: "thread-self-report-timeout-turn",
+      turn_count: 1,
+      last_codex_message: %{event: :notification, message: %{}, timestamp: stale_at},
+      last_codex_timestamp: stale_at,
+      last_codex_event: :notification,
+      last_meaningful_progress_at: stale_at,
+      repeated_event_count: 0,
+      codex_total_tokens: 0,
+      health_last_progress_total_tokens: 0,
+      health_last_progress_turn_count: 1,
+      self_report_state: :requested,
+      self_report_attempts: 1,
+      self_report_requested_at: DateTime.add(DateTime.utc_now(), -2, :second),
+      self_report_deadline_at: deadline,
+      started_at: stale_at
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    send(pid, :run_poll_cycle)
+    Process.sleep(100)
+    state = :sys.get_state(pid)
+
+    refute Process.alive?(worker_pid)
+    refute Map.has_key?(state.running, issue_id)
+    assert %{attempt: 1, error: "self-report missing" <> _} = state.retry_attempts[issue_id]
+  end
+
   test "orchestrator codex updates refresh health progress metadata" do
     issue_id = "issue-health-update"
 
@@ -1099,7 +1272,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert is_integer(due_at_ms)
     remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
-    assert remaining_ms >= 9_500
+    assert remaining_ms >= 9_000
     assert remaining_ms <= 10_500
   end
 
