@@ -553,7 +553,7 @@ defmodule SymphonyElixir.Orchestrator do
     - Reason: #{Map.get(running_entry, :health_reason)}
     - Last meaningful progress: #{iso8601(Map.get(running_entry, :last_meaningful_progress_at))}
     - Action: #{action}
-    - Retry policy: Will retry early if no useful report arrives by #{iso8601(deadline)}
+    - Retry policy: #{run_health_retry_policy_text(deadline)}
     """
 
     case Tracker.upsert_workpad_section(issue_id, "run-health-warning", markdown) do
@@ -569,6 +569,16 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp iso8601(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
   defp iso8601(_value), do: "n/a"
+
+  defp run_health_retry_policy_text(deadline) do
+    config = Config.settings!().observability.run_health
+
+    if config.early_retry_on_self_report_failure do
+      "Will retry early if no useful report arrives by #{iso8601(deadline)}"
+    else
+      "Early retry is disabled; Symphony will keep watching after #{iso8601(deadline)}"
+    end
+  end
 
   defp maybe_restart_hard_stalled_issue(%State{} = state, _issue_id, _now, timeout_ms)
        when not is_integer(timeout_ms) or timeout_ms <= 0,
@@ -1343,13 +1353,15 @@ defmodule SymphonyElixir.Orchestrator do
     signature = RunHealth.event_signature(running_entry)
 
     if RunHealth.meaningful_progress?(running_entry, config) do
-      Map.merge(running_entry, %{
+      running_entry
+      |> Map.merge(%{
         last_meaningful_progress_at: timestamp,
         last_progress_signature: signature,
         repeated_event_count: 0,
         health_last_progress_total_tokens: Map.get(running_entry, :codex_total_tokens, 0),
         health_last_progress_turn_count: Map.get(running_entry, :turn_count, 0)
       })
+      |> maybe_clear_satisfied_self_report(timestamp)
     else
       repeated_event_count =
         if Map.get(running_entry, :last_progress_signature) == signature do
@@ -1364,6 +1376,23 @@ defmodule SymphonyElixir.Orchestrator do
       })
     end
   end
+
+  defp maybe_clear_satisfied_self_report(
+         %{self_report_state: :requested, self_report_requested_at: %DateTime{} = requested_at} =
+           running_entry,
+         %DateTime{} = progress_at
+       ) do
+    if DateTime.compare(progress_at, requested_at) == :gt do
+      Map.merge(running_entry, %{
+        self_report_state: nil,
+        self_report_deadline_at: nil
+      })
+    else
+      running_entry
+    end
+  end
+
+  defp maybe_clear_satisfied_self_report(running_entry, _progress_at), do: running_entry
 
   defp evaluate_run_health(running_entry, %DateTime{} = now) do
     health = RunHealth.evaluate(running_entry, now, Config.settings!().observability.run_health)
