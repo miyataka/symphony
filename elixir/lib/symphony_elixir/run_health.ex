@@ -29,10 +29,22 @@ defmodule SymphonyElixir.RunHealth do
     last_meaningful_progress_at = get(running_entry, :last_meaningful_progress_at)
     idle_ms = idle_ms(last_meaningful_progress_at, now)
 
-    cond do
-      not config_enabled?(config) ->
-        health(:active, :disabled, :watching, last_meaningful_progress_at, idle_ms, %{})
+    if config_enabled?(config) do
+      classify_health(running_entry, now, config, last_meaningful_progress_at, idle_ms)
+    else
+      health(:active, :disabled, :watching, last_meaningful_progress_at, idle_ms, %{})
+    end
+  end
 
+  defp classify_health(running_entry, now, config, last_meaningful_progress_at, idle_ms) do
+    progress_health(running_entry, now, config) ||
+      self_report_health(running_entry, now, last_meaningful_progress_at, idle_ms) ||
+      repeated_event_health(running_entry, config, last_meaningful_progress_at, idle_ms) ||
+      idle_health(config, last_meaningful_progress_at, idle_ms)
+  end
+
+  defp progress_health(running_entry, now, config) do
+    cond do
       token_progress?(running_entry, config) ->
         health(:active, :token_progress, :watching, now, 0, %{
           token_delta: token_delta(running_entry)
@@ -43,18 +55,31 @@ defmodule SymphonyElixir.RunHealth do
           turn_delta: turn_delta(running_entry)
         })
 
-      self_report_missing?(running_entry, now) ->
-        health(:stalled, :self_report_missing, :retrying_soon, last_meaningful_progress_at, idle_ms, %{
-          self_report_deadline_at: get(running_entry, :self_report_deadline_at),
-          self_report_attempts: integer(running_entry, :self_report_attempts)
-        })
+      true ->
+        nil
+    end
+  end
 
-      repeated_same_event?(running_entry, config) ->
-        health(:suspect, :repeated_same_event, :requesting_self_report, last_meaningful_progress_at, idle_ms, %{
-          repeated_event_count: integer(running_entry, :repeated_event_count),
-          repeated_event_suspect_count: config_integer(config, :repeated_event_suspect_count)
-        })
+  defp self_report_health(running_entry, now, last_meaningful_progress_at, idle_ms) do
+    if self_report_missing?(running_entry, now) do
+      health(:stalled, :self_report_missing, :retrying_soon, last_meaningful_progress_at, idle_ms, %{
+        self_report_deadline_at: get(running_entry, :self_report_deadline_at),
+        self_report_attempts: integer(running_entry, :self_report_attempts)
+      })
+    end
+  end
 
+  defp repeated_event_health(running_entry, config, last_meaningful_progress_at, idle_ms) do
+    if repeated_same_event?(running_entry, config) do
+      health(:suspect, :repeated_same_event, :requesting_self_report, last_meaningful_progress_at, idle_ms, %{
+        repeated_event_count: integer(running_entry, :repeated_event_count),
+        repeated_event_suspect_count: config_integer(config, :repeated_event_suspect_count)
+      })
+    end
+  end
+
+  defp idle_health(config, last_meaningful_progress_at, idle_ms) do
+    cond do
       idle_ms == nil or idle_ms < config_integer(config, :quiet_after_ms) ->
         health(:active, :recent_progress, :watching, last_meaningful_progress_at, idle_ms, %{})
 

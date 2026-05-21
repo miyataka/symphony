@@ -245,19 +245,19 @@ defmodule SymphonyElixir.TestSupport do
         "  read_timeout_ms: #{yaml_value(codex_read_timeout_ms)}",
         "  stall_timeout_ms: #{yaml_value(codex_stall_timeout_ms)}",
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
-        observability_yaml(
-          observability_enabled,
-          observability_refresh_ms,
-          observability_render_interval_ms,
-          observability_run_health_omit,
-          observability_run_health_enabled,
-          observability_run_health_quiet_after_ms,
-          observability_run_health_suspect_after_ms,
-          observability_run_health_self_report_timeout_ms,
-          observability_run_health_early_retry_on_self_report_failure,
-          observability_run_health_min_token_progress_delta,
-          observability_run_health_repeated_event_suspect_count
-        ),
+        observability_yaml(%{
+          enabled: observability_enabled,
+          refresh_ms: observability_refresh_ms,
+          render_interval_ms: observability_render_interval_ms,
+          run_health_omit: observability_run_health_omit,
+          run_health_enabled: observability_run_health_enabled,
+          run_health_quiet_after_ms: observability_run_health_quiet_after_ms,
+          run_health_suspect_after_ms: observability_run_health_suspect_after_ms,
+          run_health_self_report_timeout_ms: observability_run_health_self_report_timeout_ms,
+          run_health_early_retry_on_self_report_failure: observability_run_health_early_retry_on_self_report_failure,
+          run_health_min_token_progress_delta: observability_run_health_min_token_progress_delta,
+          run_health_repeated_event_suspect_count: observability_run_health_repeated_event_suspect_count
+        }),
         server_yaml(server_port, server_host),
         "---",
         prompt
@@ -319,33 +319,21 @@ defmodule SymphonyElixir.TestSupport do
     |> Enum.join("\n")
   end
 
-  defp observability_yaml(
-         enabled,
-         refresh_ms,
-         render_interval_ms,
-         run_health_omit,
-         run_health_enabled,
-         run_health_quiet_after_ms,
-         run_health_suspect_after_ms,
-         run_health_self_report_timeout_ms,
-         run_health_early_retry_on_self_report_failure,
-         run_health_min_token_progress_delta,
-         run_health_repeated_event_suspect_count
-       ) do
+  defp observability_yaml(attrs) do
     [
       "observability:",
-      "  dashboard_enabled: #{yaml_value(enabled)}",
-      "  refresh_ms: #{yaml_value(refresh_ms)}",
-      "  render_interval_ms: #{yaml_value(render_interval_ms)}",
+      "  dashboard_enabled: #{yaml_value(attrs.enabled)}",
+      "  refresh_ms: #{yaml_value(attrs.refresh_ms)}",
+      "  render_interval_ms: #{yaml_value(attrs.render_interval_ms)}",
       run_health_yaml(
-        run_health_omit,
-        run_health_enabled,
-        run_health_quiet_after_ms,
-        run_health_suspect_after_ms,
-        run_health_self_report_timeout_ms,
-        run_health_early_retry_on_self_report_failure,
-        run_health_min_token_progress_delta,
-        run_health_repeated_event_suspect_count
+        attrs.run_health_omit,
+        attrs.run_health_enabled,
+        attrs.run_health_quiet_after_ms,
+        attrs.run_health_suspect_after_ms,
+        attrs.run_health_self_report_timeout_ms,
+        attrs.run_health_early_retry_on_self_report_failure,
+        attrs.run_health_min_token_progress_delta,
+        attrs.run_health_repeated_event_suspect_count
       )
     ]
     |> Enum.reject(&is_nil/1)
