@@ -105,6 +105,7 @@ defmodule SymphonyElixir.Linear.Adapter do
     with {:ok, state_id} <- resolve_state_id(issue_id, state_name),
          {:ok, response} <-
            client_module().graphql(@update_state_mutation, %{issueId: issue_id, stateId: state_id}),
+         :ok <- reject_graphql_errors(response),
          true <- get_in(response, ["data", "issueUpdate", "success"]) == true do
       :ok
     else
@@ -121,6 +122,7 @@ defmodule SymphonyElixir.Linear.Adapter do
   defp resolve_state_id(issue_id, state_name) do
     with {:ok, response} <-
            client_module().graphql(@state_lookup_query, %{issueId: issue_id, stateName: state_name}),
+         :ok <- reject_graphql_errors(response),
          state_id when is_binary(state_id) <-
            get_in(response, ["data", "issue", "team", "states", "nodes", Access.at(0), "id"]) do
       {:ok, state_id}
@@ -146,7 +148,6 @@ defmodule SymphonyElixir.Linear.Adapter do
          :ok <- reject_graphql_errors(response),
          {:ok, comments, page_info} <- decode_comments_page(response) do
       candidates = candidates ++ workpad_candidates(comments)
-
       workpad = preferred_workpad(candidates)
 
       cond do
@@ -180,7 +181,7 @@ defmodule SymphonyElixir.Linear.Adapter do
     Enum.filter(comments, fn comment ->
       case Map.get(comment, "body") do
         body when is_binary(body) ->
-          Regex.match?(@workpad_heading_pattern, body) or String.contains?(body, "<!-- symphony:")
+          Regex.match?(@workpad_heading_pattern, body)
 
         _ ->
           false

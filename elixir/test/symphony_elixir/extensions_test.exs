@@ -247,6 +247,16 @@ defmodule SymphonyElixir.ExtensionsTest do
     Process.put({FakeLinearClient, :graphql_result}, :unexpected)
     assert {:error, :comment_create_failed} = Adapter.create_comment("issue-1", "odd")
 
+    errors = [%{"message" => "top-level error"}]
+
+    Process.put(
+      {FakeLinearClient, :graphql_result},
+      {:ok, %{"errors" => errors, "data" => %{"commentCreate" => %{"success" => true}}}}
+    )
+
+    assert {:error, {:linear_graphql_errors, ^errors}} =
+             Adapter.create_comment("issue-1", "error")
+
     Process.put(
       {FakeLinearClient, :graphql_results},
       [
@@ -320,6 +330,38 @@ defmodule SymphonyElixir.ExtensionsTest do
     )
 
     assert {:error, :issue_update_failed} = Adapter.update_issue_state("issue-1", "Odd")
+
+    Process.put(
+      {FakeLinearClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "errors" => errors,
+           "data" => %{
+             "issue" => %{"team" => %{"states" => %{"nodes" => [%{"id" => "state-1"}]}}}
+           }
+         }}
+      ]
+    )
+
+    assert {:error, {:linear_graphql_errors, ^errors}} =
+             Adapter.update_issue_state("issue-1", "Lookup Error")
+
+    Process.put(
+      {FakeLinearClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{"team" => %{"states" => %{"nodes" => [%{"id" => "state-1"}]}}}
+           }
+         }},
+        {:ok, %{"errors" => errors, "data" => %{"issueUpdate" => %{"success" => true}}}}
+      ]
+    )
+
+    assert {:error, {:linear_graphql_errors, ^errors}} =
+             Adapter.update_issue_state("issue-1", "Update Error")
   end
 
   test "linear adapter creates missing workpad comment" do
@@ -448,6 +490,57 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert_receive {:graphql_called, update_query, %{commentId: "workpad-1", body: body}}
     assert update_query =~ "commentUpdate"
     assert body =~ "<!-- symphony:old:start -->\nold\n<!-- symphony:old:end -->"
+    assert body =~ "<!-- symphony:health:start -->\nAll clear\n<!-- symphony:health:end -->"
+  end
+
+  test "linear adapter does not stop pagination for marker-only false positives" do
+    Application.put_env(:symphony_elixir, :linear_client_module, FakeLinearClient)
+
+    Process.put(
+      {FakeLinearClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{
+               "comments" => %{
+                 "nodes" => [
+                   %{
+                     "id" => "comment-1",
+                     "body" => "Example:\n```html\n<!-- symphony:old:start -->\n```\n"
+                   }
+                 ],
+                 "pageInfo" => %{"hasNextPage" => true, "endCursor" => "cursor-1"}
+               }
+             }
+           }
+         }},
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{
+               "comments" => %{
+                 "nodes" => [
+                   %{
+                     "id" => "workpad-1",
+                     "body" => "## Codex Workpad\n\n<!-- symphony:old:start -->\nold\n<!-- symphony:old:end -->"
+                   }
+                 ],
+                 "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+               }
+             }
+           }
+         }},
+        {:ok, %{"data" => %{"commentUpdate" => %{"success" => true}}}}
+      ]
+    )
+
+    assert :ok = Adapter.upsert_workpad_section("issue-1", "health", "All clear")
+
+    assert_receive {:graphql_called, _first_query, %{issueId: "issue-1", after: nil}}
+    assert_receive {:graphql_called, _second_query, %{issueId: "issue-1", after: "cursor-1"}}
+    assert_receive {:graphql_called, _update_query, %{commentId: "workpad-1", body: body}}
+    refute body =~ "Example:"
     assert body =~ "<!-- symphony:health:start -->\nAll clear\n<!-- symphony:health:end -->"
   end
 
