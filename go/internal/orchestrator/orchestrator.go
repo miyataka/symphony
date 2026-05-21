@@ -776,12 +776,32 @@ func renderPrompt(tmpl string, issue tracker.Issue, turn int) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	issue = promptSafeIssue(issue)
 	var buf bytes.Buffer
 	err = parsed.Execute(&buf, map[string]any{
 		"Issue": issue,
 		"Turn":  turn,
 	})
 	return strings.TrimSpace(buf.String()) + "\n", err
+}
+
+func promptSafeIssue(issue tracker.Issue) tracker.Issue {
+	comments := make([]tracker.IssueComment, 0, len(issue.Comments))
+	for _, comment := range issue.Comments {
+		if tracker.TrustedCommentAuthorAssociation(comment.AuthorAssociation) {
+			comments = append(comments, comment)
+		}
+	}
+	issue.Comments = comments
+
+	reviewComments := make([]tracker.PRReviewComment, 0, len(issue.PRReviewComments))
+	for _, comment := range issue.PRReviewComments {
+		if tracker.TrustedCommentAuthorAssociation(comment.AuthorAssociation) {
+			reviewComments = append(reviewComments, comment)
+		}
+	}
+	issue.PRReviewComments = reviewComments
+	return issue
 }
 
 func sortIssues(issues []tracker.Issue) {

@@ -59,6 +59,9 @@ func TestGitHubWorkflowKeepsRuntimeFilesOutOfAgentCommits(t *testing.T) {
 	if !strings.Contains(workflow, "{{ range .Issue.Comments }}") {
 		t.Fatal("expected GitHub workflow to include issue comments in agent prompt")
 	}
+	if !strings.Contains(workflow, "Issue comments from repository owners or organization members") {
+		t.Fatal("expected GitHub workflow to document trusted issue comment sources")
+	}
 	if !strings.Contains(workflow, "{{ range .Issue.PullRequests }}") {
 		t.Fatal("expected GitHub workflow to include linked pull requests in agent prompt")
 	}
@@ -71,6 +74,9 @@ func TestGitHubWorkflowKeepsRuntimeFilesOutOfAgentCommits(t *testing.T) {
 	}
 	if !strings.Contains(workflow, "{{ range .Issue.PRReviewComments }}") {
 		t.Fatal("expected GitHub workflow to include unresolved PR review comments in agent prompt")
+	}
+	if !strings.Contains(workflow, "Unresolved PR review comments from repository owners or organization members") {
+		t.Fatal("expected GitHub workflow to document trusted PR review comment sources")
 	}
 }
 
