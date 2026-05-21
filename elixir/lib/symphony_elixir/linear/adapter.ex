@@ -15,6 +15,29 @@ defmodule SymphonyElixir.Linear.Adapter do
   }
   """
 
+  @workpad_comments_query """
+  query SymphonyWorkpadComments($issueId: String!) {
+    issue(id: $issueId) {
+      comments(first: 50) {
+        nodes {
+          id
+          body
+        }
+      }
+    }
+  }
+  """
+
+  @update_comment_mutation """
+  mutation SymphonyUpdateComment($commentId: String!, $body: String!) {
+    commentUpdate(id: $commentId, input: {body: $body}) {
+      success
+    }
+  }
+  """
+
+  @workpad_heading "## Codex Workpad"
+
   @update_state_mutation """
   mutation SymphonyUpdateIssueState($issueId: String!, $stateId: String!) {
     issueUpdate(id: $issueId, input: {stateId: $stateId}) {
@@ -58,6 +81,17 @@ defmodule SymphonyElixir.Linear.Adapter do
     end
   end
 
+  @spec upsert_workpad_section(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def upsert_workpad_section(issue_id, section_key, markdown)
+      when is_binary(issue_id) and is_binary(section_key) and is_binary(markdown) do
+    with :ok <- validate_section_key(section_key),
+         {:ok, response} <- client_module().graphql(@workpad_comments_query, %{issueId: issue_id}),
+         {:ok, workpad} <- find_or_build_workpad(response),
+         body <- upsert_section(workpad.body, section_key, markdown) do
+      write_workpad_comment(issue_id, workpad.comment_id, body)
+    end
+  end
+
   @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   def update_issue_state(issue_id, state_name)
       when is_binary(issue_id) and is_binary(state_name) do
@@ -87,5 +121,68 @@ defmodule SymphonyElixir.Linear.Adapter do
       {:error, reason} -> {:error, reason}
       _ -> {:error, :state_not_found}
     end
+  end
+
+  defp find_or_build_workpad(response) do
+    case get_in(response, ["data", "issue", "comments", "nodes"]) do
+      comments when is_list(comments) ->
+        workpad =
+          Enum.find(comments, fn comment ->
+            case Map.get(comment, "body") do
+              body when is_binary(body) -> String.contains?(body, @workpad_heading)
+              _ -> false
+            end
+          end)
+
+        {:ok,
+         %{
+           comment_id: workpad && workpad["id"],
+           body: if(workpad, do: workpad["body"], else: @workpad_heading)
+         }}
+
+      _ ->
+        {:error, :workpad_comments_failed}
+    end
+  end
+
+  defp upsert_section(body, section_key, markdown) do
+    start_marker = marker(section_key, "start")
+    end_marker = marker(section_key, "end")
+    section = [start_marker, markdown, end_marker] |> Enum.join("\n")
+    pattern = Regex.compile!(Regex.escape(start_marker) <> "[\\s\\S]*?" <> Regex.escape(end_marker))
+
+    if Regex.match?(pattern, body) do
+      String.replace(body, pattern, section)
+    else
+      body
+      |> String.trim_trailing()
+      |> Kernel.<>("\n\n" <> section)
+    end
+  end
+
+  defp write_workpad_comment(issue_id, nil, body), do: create_comment(issue_id, body)
+
+  defp write_workpad_comment(_issue_id, comment_id, body) do
+    with {:ok, response} <-
+           client_module().graphql(@update_comment_mutation, %{commentId: comment_id, body: body}),
+         true <- get_in(response, ["data", "commentUpdate", "success"]) == true do
+      :ok
+    else
+      false -> {:error, :comment_update_failed}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :comment_update_failed}
+    end
+  end
+
+  defp validate_section_key(section_key) do
+    if String.contains?(section_key, ["-->", "\n", "\r"]) do
+      {:error, :invalid_section_key}
+    else
+      :ok
+    end
+  end
+
+  defp marker(section_key, boundary) do
+    "<!-- symphony:#{section_key}:#{boundary} -->"
   end
 end

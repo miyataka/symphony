@@ -193,12 +193,15 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issues_by_states([" in progress ", 42])
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issue_states_by_ids(["issue-1"])
     assert :ok = SymphonyElixir.Tracker.create_comment("issue-1", "comment")
+    assert :ok = SymphonyElixir.Tracker.upsert_workpad_section("issue-1", "health", "healthy")
     assert :ok = SymphonyElixir.Tracker.update_issue_state("issue-1", "Done")
     assert_receive {:memory_tracker_comment, "issue-1", "comment"}
+    assert_receive {:memory_workpad_upsert, "issue-1", "health", "healthy"}
     assert_receive {:memory_tracker_state_update, "issue-1", "Done"}
 
     Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
     assert :ok = Memory.create_comment("issue-1", "quiet")
+    assert :ok = Memory.upsert_workpad_section("issue-1", "quiet", "quiet")
     assert :ok = Memory.update_issue_state("issue-1", "Quiet")
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
@@ -317,6 +320,110 @@ defmodule SymphonyElixir.ExtensionsTest do
     )
 
     assert {:error, :issue_update_failed} = Adapter.update_issue_state("issue-1", "Odd")
+  end
+
+  test "linear adapter creates missing workpad comment" do
+    Application.put_env(:symphony_elixir, :linear_client_module, FakeLinearClient)
+
+    Process.put(
+      {FakeLinearClient, :graphql_results},
+      [
+        {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => []}}}}},
+        {:ok, %{"data" => %{"commentCreate" => %{"success" => true}}}}
+      ]
+    )
+
+    assert :ok = Adapter.upsert_workpad_section("issue-1", "health", "All clear")
+
+    assert_receive {:graphql_called, comments_query, %{issueId: "issue-1"}}
+    assert comments_query =~ "comments"
+
+    assert_receive {:graphql_called, create_query, %{issueId: "issue-1", body: body}}
+    assert create_query =~ "commentCreate"
+    assert body =~ "## Codex Workpad"
+    assert body =~ "<!-- symphony:health:start -->\nAll clear\n<!-- symphony:health:end -->"
+  end
+
+  test "linear adapter updates existing workpad section without duplicating it" do
+    Application.put_env(:symphony_elixir, :linear_client_module, FakeLinearClient)
+
+    existing_body = """
+    ## Codex Workpad
+
+    Keep this introduction.
+
+    <!-- symphony:health.status:start -->
+    Old status
+    <!-- symphony:health.status:end -->
+
+    Keep this footer.
+    """
+
+    Process.put(
+      {FakeLinearClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{
+               "comments" => %{
+                 "nodes" => [
+                   %{"id" => "comment-1", "body" => "regular comment"},
+                   %{"id" => "workpad-1", "body" => existing_body}
+                 ]
+               }
+             }
+           }
+         }},
+        {:ok, %{"data" => %{"commentUpdate" => %{"success" => true}}}}
+      ]
+    )
+
+    assert :ok = Adapter.upsert_workpad_section("issue-1", "health.status", "New status")
+
+    assert_receive {:graphql_called, comments_query, %{issueId: "issue-1"}}
+    assert comments_query =~ "comments"
+
+    assert_receive {:graphql_called, update_query, %{commentId: "workpad-1", body: body}}
+    assert update_query =~ "commentUpdate"
+    assert body =~ "Keep this introduction."
+    assert body =~ "Keep this footer."
+    assert body =~ "<!-- symphony:health.status:start -->\nNew status\n<!-- symphony:health.status:end -->"
+    refute body =~ "Old status"
+    assert length(Regex.scan(~r/<!-- symphony:health\.status:start -->/, body)) == 1
+  end
+
+  test "linear adapter reports workpad upsert failures" do
+    Application.put_env(:symphony_elixir, :linear_client_module, FakeLinearClient)
+
+    Process.put({FakeLinearClient, :graphql_results}, [{:error, :boom}])
+    assert {:error, :boom} = Adapter.upsert_workpad_section("issue-1", "health", "body")
+
+    Process.put({FakeLinearClient, :graphql_results}, [{:ok, %{"data" => %{}}}])
+    assert {:error, :workpad_comments_failed} = Adapter.upsert_workpad_section("issue-1", "health", "body")
+
+    Process.put(
+      {FakeLinearClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{
+               "comments" => %{
+                 "nodes" => [%{"id" => "workpad-1", "body" => "## Codex Workpad"}]
+               }
+             }
+           }
+         }},
+        {:ok, %{"data" => %{"commentUpdate" => %{"success" => false}}}}
+      ]
+    )
+
+    assert {:error, :comment_update_failed} =
+             Adapter.upsert_workpad_section("issue-1", "health", "body")
+
+    assert {:error, :invalid_section_key} =
+             Adapter.upsert_workpad_section("issue-1", "bad --> key", "body")
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do
