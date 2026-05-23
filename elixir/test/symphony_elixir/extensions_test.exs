@@ -634,6 +634,26 @@ defmodule SymphonyElixir.ExtensionsTest do
            "data" => %{
              "issue" => %{
                "comments" => %{
+                 "nodes" => [%{"id" => "not-workpad"}],
+                 "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+               }
+             }
+           }
+         }},
+        {:ok, %{"data" => %{"commentCreate" => %{"success" => true}}}}
+      ]
+    )
+
+    assert :ok = Adapter.upsert_workpad_section("issue-1", "health", "body")
+
+    Process.put(
+      {FakeLinearClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{
+               "comments" => %{
                  "nodes" => [%{"id" => "workpad-1", "body" => "## Codex Workpad"}],
                  "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
                }
@@ -641,6 +661,48 @@ defmodule SymphonyElixir.ExtensionsTest do
            }
          }},
         {:ok, %{"data" => %{"commentUpdate" => %{"success" => false}}}}
+      ]
+    )
+
+    assert {:error, :comment_update_failed} =
+             Adapter.upsert_workpad_section("issue-1", "health", "body")
+
+    Process.put(
+      {FakeLinearClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{
+               "comments" => %{
+                 "nodes" => [%{"id" => "workpad-1", "body" => "## Codex Workpad"}],
+                 "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+               }
+             }
+           }
+         }},
+        {:ok, %{"data" => %{"commentUpdate" => %{}}}}
+      ]
+    )
+
+    assert {:error, :comment_update_failed} =
+             Adapter.upsert_workpad_section("issue-1", "health", "body")
+
+    Process.put(
+      {FakeLinearClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{
+               "comments" => %{
+                 "nodes" => [%{"id" => "workpad-1", "body" => "## Codex Workpad"}],
+                 "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+               }
+             }
+           }
+         }},
+        :weird
       ]
     )
 

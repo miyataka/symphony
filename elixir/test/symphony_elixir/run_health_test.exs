@@ -371,7 +371,15 @@ defmodule SymphonyElixir.RunHealthTest do
   test "event_signature returns compact stable signatures" do
     assert RunHealth.event_signature(entry(last_codex_event: :session_started)) == "session_started"
 
-    assert RunHealth.event_signature(entry(last_codex_event: "agent_message", last_codex_message: %{type: "agent_message"})) == "agent_message"
+    assert RunHealth.event_signature(entry(last_codex_event: "agent_message", last_codex_message: %{type: "agent_message"})) ==
+             "agent_message"
+
+    assert RunHealth.event_signature(entry(last_codex_event: nil, last_codex_message: %{type: "agent_message"})) ==
+             "agent_message"
+
+    assert RunHealth.event_signature(entry(last_codex_event: nil, last_codex_message: "unexpected")) == "nil"
+    assert RunHealth.event_signature(entry(last_codex_event: "")) == "unknown"
+    assert RunHealth.event_signature(entry(last_codex_event: 123)) == "123"
   end
 
   test "meaningful_progress? detects token and turn progress" do
@@ -406,5 +414,57 @@ defmodule SymphonyElixir.RunHealthTest do
     assert health.status == :suspect
     assert health.reason == :no_meaningful_progress
     refute RunHealth.meaningful_progress?(entry(), config(min_token_progress_delta: 0))
+  end
+
+  test "malformed run health metadata falls back without progress" do
+    now = DateTime.utc_now()
+    progress_at = DateTime.add(now, -700, :second)
+
+    health =
+      RunHealth.evaluate(
+        entry(
+          last_codex_timestamp: now,
+          last_codex_event: :notification,
+          last_codex_message: %{message: "unexpected"},
+          last_meaningful_progress_at: progress_at,
+          self_report_state: :requested,
+          self_report_deadline_at: nil
+        ),
+        now,
+        %{
+          enabled: true,
+          quiet_after_ms: "bad",
+          suspect_after_ms: "bad",
+          repeated_event_suspect_count: "bad",
+          min_token_progress_delta: "bad"
+        }
+      )
+
+    assert health.status == :suspect
+    assert health.reason == :no_meaningful_progress
+
+    refute RunHealth.meaningful_progress?(
+             entry(
+               last_codex_timestamp: now,
+               last_codex_event: :notification,
+               last_codex_message: %{message: %{"payload" => "unexpected"}},
+               last_meaningful_progress_at: progress_at
+             ),
+             config()
+           )
+
+    refute RunHealth.meaningful_progress?(
+             entry(
+               last_codex_timestamp: now,
+               last_codex_event: :notification,
+               last_codex_message: %{
+                 message: %{"payload" => %{"method" => "item/completed", "params" => "unexpected"}}
+               },
+               last_meaningful_progress_at: progress_at
+             ),
+             config()
+           )
+
+    refute RunHealth.meaningful_progress?(nil, config())
   end
 end
