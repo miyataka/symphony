@@ -386,6 +386,29 @@ Terminal issues remove their workspaces on startup. `workspace.cleanup_orphans` 
 workspace directories that no longer match visible Project items, and
 `workspace.cleanup_stale_after_days` removes old workspace directories by modification time.
 
+## Restart and shutdown safety
+
+Each running issue writes a durable lease to `.symphony/run_lease.json` in its workspace. The lease
+contains the issue id, state, run id, process id, status, start time, and heartbeat time. While the
+orchestrator process is alive it refreshes the heartbeat every 30 seconds.
+
+On startup and each poll, active Project states such as `In Progress` and `Rework` are still
+dispatchable, but they are not dispatched blindly. If the issue workspace has a non-stale `running`
+lease from a previous process, Symphony skips the issue so a restarted orchestrator does not start a
+second agent in the same workspace. A running lease becomes stale after five minutes without a
+heartbeat; Symphony then marks the stale lease and may retry the issue from its current Project
+state.
+
+On graceful shutdown, Symphony cancels active runs, waits for their goroutines to clean up, records
+the lease as `interrupted`, and updates the Workpad to say the issue remains in its current state for
+a future retry. If cleanup does not finish before the shutdown grace period, the Workpad records that
+cleanup was interrupted; a fresh process will continue to honor the still-running lease until it
+goes stale.
+
+`agent.command` runs in its own process group. Cancellation and turn timeouts kill that process
+group, not just the immediate `bash -lc` wrapper, so shell-spawned child processes do not continue
+working on the branch after the orchestrator has stopped the run.
+
 ## Hook examples
 
 Reusable shell snippets live in `go/examples/`:

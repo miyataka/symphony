@@ -44,6 +44,7 @@ type Service struct {
 
 type runHandle struct {
 	cancel       context.CancelFunc
+	done         chan struct{}
 	issue        tracker.Issue
 	startedAt    time.Time
 	retryCount   int
@@ -118,7 +119,9 @@ func (s *Service) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			s.stopAll()
+			stopCtx, cancel := context.WithTimeout(context.Background(), s.shutdownGracePeriod())
+			s.stopAll(stopCtx)
+			cancel()
 			return ctx.Err()
 		case <-ticker.C:
 			if err := s.poll(ctx); err != nil {
@@ -151,6 +154,9 @@ func (s *Service) poll(ctx context.Context) error {
 				"reason", "blocked_by",
 				"blocked_by", blockerIdentifiers(issue.BlockedBy),
 			)
+			continue
+		}
+		if s.shouldSkipForRunLease(ctx, issue) {
 			continue
 		}
 		if !s.canDispatch(issue) {
@@ -252,7 +258,7 @@ func (s *Service) canDispatch(issue tracker.Issue) bool {
 
 func (s *Service) dispatch(parent context.Context, issue tracker.Issue, retryCount int) {
 	ctx, cancel := context.WithCancel(parent)
-	handle := &runHandle{cancel: cancel, issue: issue, startedAt: time.Now(), retryCount: retryCount, agentKind: s.cfg.Agent.Kind}
+	handle := &runHandle{cancel: cancel, done: make(chan struct{}), issue: issue, startedAt: time.Now(), retryCount: retryCount, agentKind: s.cfg.Agent.Kind}
 
 	s.mu.Lock()
 	s.running[issue.ID] = handle
@@ -261,6 +267,7 @@ func (s *Service) dispatch(parent context.Context, issue tracker.Issue, retryCou
 	s.logger.Info("dispatching issue", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "state", issue.State, "retry", retryCount, "agent_kind", s.cfg.Agent.Kind)
 
 	go func() {
+		defer close(handle.done)
 		err := s.runIssue(ctx, issue)
 		s.mu.Lock()
 		delete(s.running, issue.ID)
@@ -272,6 +279,9 @@ func (s *Service) dispatch(parent context.Context, issue tracker.Issue, retryCou
 			return
 		}
 		if parent.Err() != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), s.cfg.HookTimeout())
+			s.recordInterruptedRun(cleanupCtx, issue)
+			cancel()
 			s.logger.Info("issue run stopped", "issue_id", issue.ID, "issue_identifier", issue.Identifier)
 			return
 		}
@@ -301,11 +311,20 @@ func (s *Service) dispatchRetry(parent context.Context, issue tracker.Issue, ret
 	}
 }
 
-func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) error {
+func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) (runErr error) {
 	path, _, err := s.workspaces.Ensure(ctx, issue, s.cfg.HookTimeout())
 	if err != nil {
 		return err
 	}
+	lease, stopLease, err := s.startRunLease(path, issue, s.cfg.Agent.Kind)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		stopLease()
+		status, note := runLeaseCompletion(ctx, runErr)
+		s.finishRunLease(path, issue, lease.RunID, status, note)
+	}()
 	s.upsertWorkpad(ctx, issue, s.workpadBody(issue, "Running", path, "Workspace prepared and agent execution started."))
 
 	if state, ok := completedFallbackState(path, issue); ok {
@@ -553,6 +572,7 @@ func (s *Service) runAgentTurnWithProfile(parent context.Context, path string, i
 
 	cmd := exec.CommandContext(ctx, "bash", "-lc", profile.Command)
 	cmd.Dir = path
+	configureCommandProcessGroup(cmd)
 	cmd.Env = append(os.Environ(),
 		"SYMPHONY_PROMPT_FILE="+promptPath,
 		"SYMPHONY_TURN="+fmt.Sprint(turn),
@@ -754,12 +774,42 @@ func (s *Service) cleanupWorkspaces(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) stopAll() {
+func (s *Service) stopAll(ctx context.Context) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	handles := make([]*runHandle, 0, len(s.running))
 	for _, handle := range s.running {
+		handles = append(handles, handle)
+	}
+	s.mu.Unlock()
+
+	for _, handle := range handles {
 		handle.cancel()
 	}
+	for _, handle := range handles {
+		select {
+		case <-handle.done:
+		case <-ctx.Done():
+			note := "Agent run cleanup did not finish before orchestrator shutdown grace period; recording cleanup as interrupted."
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), s.cfg.HookTimeout())
+			s.recordInterruptedRun(cleanupCtx, handle.issue, note)
+			cancel()
+		}
+	}
+}
+
+func (s *Service) recordInterruptedRun(ctx context.Context, issue tracker.Issue, notes ...string) {
+	note := "Agent run interrupted by orchestrator shutdown; cleanup finished and the issue remains in its current state for a future retry."
+	if len(notes) > 0 && strings.TrimSpace(notes[0]) != "" {
+		note = notes[0]
+	}
+	s.upsertWorkpad(ctx, issue, s.workpadBody(issue, issue.State, "", note))
+}
+
+func (s *Service) shutdownGracePeriod() time.Duration {
+	if s.cfg.Hooks.TimeoutMS > 0 {
+		return s.cfg.HookTimeout()
+	}
+	return 30 * time.Second
 }
 
 func (s *Service) activeState(state string) bool {

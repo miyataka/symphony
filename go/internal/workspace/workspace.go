@@ -63,6 +63,14 @@ func (m Manager) Ensure(ctx context.Context, issue tracker.Issue, timeout time.D
 	return path, created, nil
 }
 
+func (m Manager) PathForIssue(identifier string) (string, bool, error) {
+	root, err := canonicalRoot(m.Root)
+	if err != nil {
+		return "", false, err
+	}
+	return validateWorkspacePath(filepath.Join(root, safeIdentifier(identifier)), root)
+}
+
 func (m Manager) Remove(ctx context.Context, identifier string, timeout time.Duration) error {
 	root, err := canonicalRoot(m.Root)
 	if err != nil {
