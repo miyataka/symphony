@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -273,6 +274,387 @@ func TestRunIssueRecordsEmptyOutputReason(t *testing.T) {
 	}
 	if strings.Contains(recorder.workpad, "ready for review") {
 		t.Fatalf("expected workpad not to mark issue ready for review, got: %q", recorder.workpad)
+	}
+}
+
+func TestRunIssueFallsBackFromClaudeLimitToCodex(t *testing.T) {
+	tracePath := filepath.Join(t.TempDir(), "agent.trace")
+	cfg := testConfig()
+	cfg.Workspace.Root = t.TempDir()
+	cfg.Agent.Kind = "claude-code"
+	cfg.Agent.Command = fmt.Sprintf(`printf 'wrapper classified stable claude_limit signal\n' >&2; printf 'claude\n' >> %q; exit 88`, tracePath)
+	cfg.Agent.Fallback.Kind = "codex"
+	cfg.Agent.Fallback.Command = fmt.Sprintf(`printf 'codex\n' >> %q; printf 'done\n'`, tracePath)
+	cfg.Agent.Fallback.On = []string{"claude_limit"}
+	enabled := true
+	cfg.Agent.Fallback.Enabled = &enabled
+	recorder := &recordingTracker{
+		issueStatesByID: []tracker.Issue{{
+			ID:                      "I_1",
+			Identifier:              "repo#1",
+			Title:                   "Issue",
+			State:                   "In Progress",
+			RepositoryNameWithOwner: "repo",
+		}},
+	}
+	service := New(Options{
+		Config:         cfg,
+		PromptTemplate: "Issue {{ .Issue.Identifier }}",
+		Tracker:        recorder,
+	})
+
+	err := service.runIssue(context.Background(), tracker.Issue{
+		ID:                      "I_1",
+		Identifier:              "repo#1",
+		Title:                   "Issue",
+		State:                   "In Progress",
+		RepositoryNameWithOwner: "repo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	trace, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(trace) != "claude\ncodex\n" {
+		t.Fatalf("expected claude then codex fallback, got %q", trace)
+	}
+	if !strings.Contains(recorder.workpad, "claude-code limit reached; retrying with codex") {
+		t.Fatalf("expected workpad to describe fallback, got: %q", recorder.workpad)
+	}
+	if !strings.Contains(recorder.workpad, "Claude-only hooks, slash-skill assumptions, and per-agent restrictions are advisory") {
+		t.Fatalf("expected workpad to describe fallback context portability, got: %q", recorder.workpad)
+	}
+
+	state, ok := readFallbackState(filepath.Join(cfg.Workspace.Root, "repo_1"))
+	if !ok {
+		t.Fatal("expected fallback state to be persisted")
+	}
+	if len(state.Attempts) != 2 {
+		t.Fatalf("expected fallback state to record two attempt boundaries, got %#v", state.Attempts)
+	}
+	if state.Attempts[0].AgentKind != "claude-code" || state.Attempts[0].Status != "failed" || state.Attempts[0].Reason != claudeLimitReason {
+		t.Fatalf("expected original failed claude attempt, got %#v", state.Attempts[0])
+	}
+	if state.Attempts[1].AgentKind != "codex" || state.Attempts[1].Status != "completed" || state.Attempts[1].FallbackFrom != "claude-code" {
+		t.Fatalf("expected completed codex fallback attempt, got %#v", state.Attempts[1])
+	}
+}
+
+func TestRunIssueDoesNotFallbackForOrdinaryClaudeFailure(t *testing.T) {
+	tracePath := filepath.Join(t.TempDir(), "agent.trace")
+	cfg := testConfig()
+	cfg.Workspace.Root = t.TempDir()
+	cfg.Agent.Kind = "claude-code"
+	cfg.Agent.Command = fmt.Sprintf(`printf 'unit tests failed in package rate limiter\n' >&2; printf 'claude\n' >> %q; exit 1`, tracePath)
+	cfg.Agent.Fallback.Kind = "codex"
+	cfg.Agent.Fallback.Command = fmt.Sprintf(`printf 'codex\n' >> %q; printf 'done\n'`, tracePath)
+	cfg.Agent.Fallback.On = []string{"claude_limit"}
+	enabled := true
+	cfg.Agent.Fallback.Enabled = &enabled
+	recorder := &recordingTracker{}
+	service := New(Options{
+		Config:         cfg,
+		PromptTemplate: "Issue {{ .Issue.Identifier }}",
+		Tracker:        recorder,
+	})
+
+	err := service.runIssue(context.Background(), tracker.Issue{
+		ID:                      "I_1",
+		Identifier:              "repo#1",
+		Title:                   "Issue",
+		State:                   "In Progress",
+		RepositoryNameWithOwner: "repo",
+	})
+	if err == nil {
+		t.Fatal("expected ordinary claude failure to remain failed")
+	}
+
+	trace, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(trace) != "claude\n" {
+		t.Fatalf("expected only claude command to run, got %q", trace)
+	}
+	if strings.Contains(recorder.workpad, "retrying with codex") {
+		t.Fatalf("expected workpad not to mention fallback, got: %q", recorder.workpad)
+	}
+}
+
+func TestRunIssueDoesNotStartFallbackWhenStateCannotBePersisted(t *testing.T) {
+	tracePath := filepath.Join(t.TempDir(), "agent.trace")
+	cfg := testConfig()
+	cfg.Workspace.Root = t.TempDir()
+	cfg.Hooks.BeforeRun = `rm -rf .symphony; touch .symphony`
+	cfg.Agent.Kind = "claude-code"
+	cfg.Agent.Command = fmt.Sprintf(`printf 'Claude AI usage limit reached.\n' >&2; printf 'claude\n' >> %q; exit 1`, tracePath)
+	cfg.Agent.Fallback.Kind = "codex"
+	cfg.Agent.Fallback.Command = fmt.Sprintf(`printf 'codex\n' >> %q; printf 'done\n'`, tracePath)
+	cfg.Agent.Fallback.On = []string{"claude_limit"}
+	enabled := true
+	cfg.Agent.Fallback.Enabled = &enabled
+	recorder := &recordingTracker{}
+	service := New(Options{
+		Config:         cfg,
+		PromptTemplate: "Issue {{ .Issue.Identifier }}",
+		Tracker:        recorder,
+	})
+
+	err := service.runIssue(context.Background(), tracker.Issue{
+		ID:                      "I_1",
+		Identifier:              "repo#1",
+		Title:                   "Issue",
+		State:                   "In Progress",
+		RepositoryNameWithOwner: "repo",
+	})
+	if err == nil {
+		t.Fatal("expected fallback persistence failure")
+	}
+	if !strings.Contains(err.Error(), "record agent fallback state") {
+		t.Fatalf("expected persistence error, got: %v", err)
+	}
+
+	trace, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(trace) != "claude\n" {
+		t.Fatalf("expected fallback command not to run without persisted state, got %q", trace)
+	}
+	if strings.Contains(recorder.workpad, "retrying with codex") {
+		t.Fatalf("expected workpad not to claim fallback started, got: %q", recorder.workpad)
+	}
+}
+
+func TestIsClaudeLimitFailureClassifiesNarrowSignals(t *testing.T) {
+	tests := []struct {
+		name     string
+		kind     string
+		exitCode int
+		output   string
+		want     bool
+	}{
+		{
+			name:     "usage limit",
+			kind:     "claude-code",
+			exitCode: 1,
+			output:   "Claude AI usage limit reached. Your limit will reset soon.",
+			want:     true,
+		},
+		{
+			name:     "rate limit error",
+			kind:     "claude-code",
+			exitCode: 1,
+			output:   `{"error":{"type":"rate_limit_error","message":"too many requests"}}`,
+			want:     true,
+		},
+		{
+			name:     "claude quota exceeded",
+			kind:     "claude-code",
+			exitCode: 1,
+			output:   "Claude Code quota exceeded for this organization",
+			want:     true,
+		},
+		{
+			name:     "reserved exit code",
+			kind:     "claude-code",
+			exitCode: claudeLimitExitCode,
+			output:   "wrapper classified claude limit",
+			want:     true,
+		},
+		{
+			name:     "ordinary task failure mentioning rate limiter",
+			kind:     "claude-code",
+			exitCode: 1,
+			output:   "unit tests failed in package rate limiter",
+			want:     false,
+		},
+		{
+			name:     "generic context limit",
+			kind:     "claude-code",
+			exitCode: 1,
+			output:   "context length limit exceeded while reading source",
+			want:     false,
+		},
+		{
+			name:     "codex reserved code ignored",
+			kind:     "codex",
+			exitCode: claudeLimitExitCode,
+			output:   "wrapper classified claude limit",
+			want:     false,
+		},
+		{
+			name:     "generic too many requests ignored",
+			kind:     "claude-code",
+			exitCode: 1,
+			output:   "HTTP 429: too many requests from the local test server",
+			want:     false,
+		},
+		{
+			name:     "generic quota exceeded ignored",
+			kind:     "claude-code",
+			exitCode: 1,
+			output:   "GitHub API quota exceeded while running tests",
+			want:     false,
+		},
+		{
+			name:     "generic 429 rate limit ignored",
+			kind:     "claude-code",
+			exitCode: 1,
+			output:   "HTTP 429: rate limit exceeded by the local test server",
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := &agentCommandError{
+				kind:     tt.kind,
+				exitCode: tt.exitCode,
+				output:   tt.output,
+				err:      fmt.Errorf("exit status %d", tt.exitCode),
+			}
+			if got := isClaudeLimitFailure(tt.kind, err); got != tt.want {
+				t.Fatalf("isClaudeLimitFailure()=%v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunIssueResumesPersistedFallbackAfterRestart(t *testing.T) {
+	tracePath := filepath.Join(t.TempDir(), "agent.trace")
+	cfg := testConfig()
+	cfg.Workspace.Root = t.TempDir()
+	cfg.Agent.Kind = "claude-code"
+	cfg.Agent.Command = fmt.Sprintf(`printf 'Claude AI usage limit reached.\n' >&2; printf 'claude\n' >> %q; exit 1`, tracePath)
+	cfg.Agent.Fallback.Kind = "codex"
+	cfg.Agent.Fallback.Command = fmt.Sprintf(`printf 'codex\n' >> %q; printf 'fallback failed\n'; exit 2`, tracePath)
+	cfg.Agent.Fallback.On = []string{"claude_limit"}
+	enabled := true
+	cfg.Agent.Fallback.Enabled = &enabled
+	recorder := &recordingTracker{}
+	service := New(Options{
+		Config:         cfg,
+		PromptTemplate: "Issue {{ .Issue.Identifier }}",
+		Tracker:        recorder,
+	})
+	issue := tracker.Issue{
+		ID:                      "I_1",
+		Identifier:              "repo#1",
+		Title:                   "Issue",
+		State:                   "In Progress",
+		RepositoryNameWithOwner: "repo",
+	}
+
+	if err := service.runIssue(context.Background(), issue); err == nil {
+		t.Fatal("expected first fallback codex run to fail")
+	}
+	if err := service.runIssue(context.Background(), issue); err == nil {
+		t.Fatal("expected resumed fallback codex run to fail")
+	}
+
+	trace, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(trace) != "claude\ncodex\ncodex\n" {
+		t.Fatalf("expected restart to resume codex without rerunning claude, got %q", trace)
+	}
+}
+
+func TestRunIssueDoesNotDuplicateCompletedFallbackAfterRestart(t *testing.T) {
+	tracePath := filepath.Join(t.TempDir(), "agent.trace")
+	cfg := testConfig()
+	cfg.Workspace.Root = t.TempDir()
+	cfg.Agent.Kind = "claude-code"
+	cfg.Agent.Command = fmt.Sprintf(`printf 'wrapper classified stable claude_limit signal\n' >&2; printf 'claude\n' >> %q; exit 88`, tracePath)
+	cfg.Agent.Fallback.Kind = "codex"
+	cfg.Agent.Fallback.Command = fmt.Sprintf(`printf 'codex\n' >> %q; printf 'done\n'`, tracePath)
+	cfg.Agent.Fallback.On = []string{"claude_limit"}
+	enabled := true
+	cfg.Agent.Fallback.Enabled = &enabled
+	recorder := &recordingTracker{
+		issueStatesByID: []tracker.Issue{{
+			ID:                      "I_1",
+			Identifier:              "repo#1",
+			Title:                   "Issue",
+			State:                   "In Progress",
+			RepositoryNameWithOwner: "repo",
+		}},
+	}
+	service := New(Options{
+		Config:         cfg,
+		PromptTemplate: "Issue {{ .Issue.Identifier }}",
+		Tracker:        recorder,
+	})
+	issue := tracker.Issue{
+		ID:                      "I_1",
+		Identifier:              "repo#1",
+		Title:                   "Issue",
+		State:                   "In Progress",
+		RepositoryNameWithOwner: "repo",
+	}
+
+	if err := service.runIssue(context.Background(), issue); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.runIssue(context.Background(), issue); err != nil {
+		t.Fatal(err)
+	}
+
+	trace, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(trace) != "claude\ncodex\n" {
+		t.Fatalf("expected completed fallback not to duplicate agents after restart, got %q", trace)
+	}
+}
+
+func TestRunIssueDoesNotReuseFallbackAfterIssueStateChanges(t *testing.T) {
+	tracePath := filepath.Join(t.TempDir(), "agent.trace")
+	cfg := testConfig()
+	cfg.Workspace.Root = t.TempDir()
+	cfg.Agent.Kind = "claude-code"
+	cfg.Agent.Command = fmt.Sprintf(`printf 'Claude AI usage limit reached.\n' >&2; printf 'claude\n' >> %q; exit 1`, tracePath)
+	cfg.Agent.Fallback.Kind = "codex"
+	cfg.Agent.Fallback.Command = fmt.Sprintf(`printf 'codex\n' >> %q; printf 'fallback failed\n'; exit 2`, tracePath)
+	cfg.Agent.Fallback.On = []string{"claude_limit"}
+	enabled := true
+	cfg.Agent.Fallback.Enabled = &enabled
+	recorder := &recordingTracker{}
+	service := New(Options{
+		Config:         cfg,
+		PromptTemplate: "Issue {{ .Issue.Identifier }}",
+		Tracker:        recorder,
+	})
+
+	inProgress := tracker.Issue{
+		ID:                      "I_1",
+		Identifier:              "repo#1",
+		Title:                   "Issue",
+		State:                   "In Progress",
+		RepositoryNameWithOwner: "repo",
+	}
+	if err := service.runIssue(context.Background(), inProgress); err == nil {
+		t.Fatal("expected first fallback codex run to fail")
+	}
+
+	rework := inProgress
+	rework.State = "Rework"
+	if err := service.runIssue(context.Background(), rework); err == nil {
+		t.Fatal("expected fresh rework claude run to fail")
+	}
+
+	trace, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(trace) != "claude\ncodex\nclaude\ncodex\n" {
+		t.Fatalf("expected state change to return to primary claude before fallback, got %q", trace)
 	}
 }
 

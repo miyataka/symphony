@@ -103,6 +103,74 @@ agent:
   max_turns: 20
 ```
 
+### Claude Code fallback to Codex
+
+When `agent.kind: claude-code` is used, Symphony enables a one-way fallback to Codex by
+default for the current active run. If the Claude Code command exits nonzero with the reserved
+wrapper exit code `88`, Symphony classifies it as `claude_limit`. A narrow stderr/stdout
+classifier remains as a compatibility path for known usage/rate/quota wording and structured
+`rate_limit_error` output. Ordinary task failures still use the normal failed-run retry/backoff
+path.
+
+On fallback, Symphony records an explicit attempt boundary instead of treating the same attempt as
+if it silently changed agents. The failed Claude Code attempt and the running/completed Codex
+fallback attempt are written to the workspace fallback state, Symphony writes a Workpad note such as
+`claude-code limit reached; retrying with codex`, and the same turn is retried with the fallback
+command. The Workpad note also calls out that workspace and issue context are preserved while
+Claude-only hooks, slash-skill assumptions, and per-agent restrictions are advisory in Codex.
+
+The fallback is one-way only for the current issue state. Symphony writes
+`.symphony/agent-fallback.json` inside the issue workspace before starting Codex; if the
+orchestrator restarts while the issue is still in that state and the fallback is not completed, the
+next run resumes with Codex instead of starting Claude Code again. If the persisted fallback is
+already completed, Symphony skips duplicate agent execution and lets the normal successful handoff
+path run. If the issue later changes state, for example from `In Progress` to `Rework`, the stale
+fallback record is ignored and the configured primary `agent.kind` can run again.
+
+The default fallback is equivalent to:
+
+```yaml
+agent:
+  kind: claude-code
+  fallback:
+    enabled: true
+    kind: codex
+    on: [claude_limit]
+    command: |
+      mkdir -p .tmp
+      TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp" \
+        codex exec --sandbox workspace-write --skip-git-repo-check < "$SYMPHONY_PROMPT_FILE"
+```
+
+To disable automatic fallback:
+
+```yaml
+agent:
+  kind: claude-code
+  fallback:
+    enabled: false
+```
+
+To customize only the fallback command:
+
+```yaml
+agent:
+  kind: claude-code
+  fallback:
+    kind: codex
+    on: [claude_limit]
+    command: |
+      mkdir -p .tmp
+      TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp" \
+        codex exec --sandbox workspace-write --skip-git-repo-check --model gpt-5.4 < "$SYMPHONY_PROMPT_FILE"
+```
+
+The classifier intentionally does not match generic command failures. Prefer a thin Claude Code
+wrapper that owns message parsing and exits `88` for `claude_limit`; when Claude Code later exposes
+native structured exit codes, map them in that wrapper. The compatibility text classifier recognizes
+`rate_limit_error`-style output, and otherwise requires known usage/rate/quota or HTTP 429 wording to
+also mention a Claude/Anthropic context.
+
 ## Configuration
 
 Use YAML front matter plus a Go `text/template` prompt body. The prompt receives:
@@ -230,6 +298,7 @@ Instructions:
 - `SYMPHONY_REPOSITORY`
 - `SYMPHONY_REPOSITORY_SSH_URL`
 - `SYMPHONY_REPOSITORY_HTML_URL`
+- `SYMPHONY_AGENT_KIND` (`codex` or `claude-code`; during fallback this is the active fallback kind)
 - `SYMPHONY_PROMPT_FILE` for `agent.command`; when `agent.command` is configured this prompt file is outside the workspace and removed after the command exits
 - `SYMPHONY_TURN` for `agent.command`
 

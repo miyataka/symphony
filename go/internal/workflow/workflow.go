@@ -80,14 +80,24 @@ type HooksConfig struct {
 	TimeoutMS    int    `yaml:"timeout_ms"`
 }
 
+type AgentFallbackConfig struct {
+	Enabled *bool    `yaml:"enabled"`
+	Kind    string   `yaml:"kind"`
+	Command string   `yaml:"command"`
+	On      []string `yaml:"on"`
+}
+
 type AgentConfig struct {
-	Kind                       string         `yaml:"kind"`
-	Command                    string         `yaml:"command"`
-	MaxConcurrentAgents        int            `yaml:"max_concurrent_agents"`
-	MaxConcurrentAgentsByState map[string]int `yaml:"max_concurrent_agents_by_state"`
-	MaxTurns                   int            `yaml:"max_turns"`
-	MaxRetryBackoffMS          int            `yaml:"max_retry_backoff_ms"`
-	TurnTimeoutMS              int            `yaml:"turn_timeout_ms"`
+	Kind                       string              `yaml:"kind"`
+	Command                    string              `yaml:"command"`
+	Fallback                   AgentFallbackConfig `yaml:"fallback"`
+	FallbackKinds              []string            `yaml:"fallback_kinds"`
+	FallbackOn                 []string            `yaml:"fallback_on"`
+	MaxConcurrentAgents        int                 `yaml:"max_concurrent_agents"`
+	MaxConcurrentAgentsByState map[string]int      `yaml:"max_concurrent_agents_by_state"`
+	MaxTurns                   int                 `yaml:"max_turns"`
+	MaxRetryBackoffMS          int                 `yaml:"max_retry_backoff_ms"`
+	TurnTimeoutMS              int                 `yaml:"turn_timeout_ms"`
 }
 
 type ObservabilityConfig struct {
@@ -244,12 +254,11 @@ func (c *Config) Resolve() error {
 	default:
 		return fmt.Errorf("agent.kind must be \"codex\" or \"claude-code\", got %q", c.Agent.Kind)
 	}
-	if strings.TrimSpace(c.Agent.Command) == "" && c.Agent.Kind == "codex" {
-		c.Agent.Command = `mkdir -p .tmp
-TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp" codex exec --sandbox workspace-write --skip-git-repo-check < "$SYMPHONY_PROMPT_FILE"`
+	if strings.TrimSpace(c.Agent.Command) == "" {
+		c.Agent.Command = defaultAgentCommand(c.Agent.Kind)
 	}
-	if strings.TrimSpace(c.Agent.Command) == "" && c.Agent.Kind == "claude-code" {
-		c.Agent.Command = `cat "$SYMPHONY_PROMPT_FILE" | claude -p --dangerously-skip-permissions`
+	if err := c.resolveAgentFallback(); err != nil {
+		return err
 	}
 	if c.Tracker.OwnerType == "" {
 		c.Tracker.OwnerType = "user"
@@ -362,6 +371,97 @@ TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp" codex exec --sandbox workspa
 		return errors.New("tracker.project_number is required")
 	}
 	return nil
+}
+
+func (c *Config) resolveAgentFallback() error {
+	fallback := &c.Agent.Fallback
+	if len(c.Agent.FallbackKinds) > 0 && strings.TrimSpace(fallback.Kind) == "" {
+		fallback.Kind = c.Agent.FallbackKinds[0]
+	}
+	if len(c.Agent.FallbackOn) > 0 && len(fallback.On) == 0 {
+		fallback.On = c.Agent.FallbackOn
+	}
+
+	fallback.Kind = strings.ToLower(strings.TrimSpace(fallback.Kind))
+	fallback.Command = strings.TrimSpace(fallback.Command)
+	fallback.On = normalizeFallbackReasons(fallback.On)
+
+	configured := fallback.Kind != "" ||
+		fallback.Command != "" ||
+		len(fallback.On) > 0 ||
+		len(c.Agent.FallbackKinds) > 0 ||
+		len(c.Agent.FallbackOn) > 0
+	enabled := c.Agent.Kind == "claude-code" || configured
+	if fallback.Enabled != nil {
+		enabled = *fallback.Enabled
+	}
+	fallback.Enabled = boolPtr(enabled)
+	if !enabled {
+		fallback.Kind = ""
+		fallback.Command = ""
+		fallback.On = nil
+		return nil
+	}
+
+	if fallback.Kind == "" && c.Agent.Kind == "claude-code" {
+		fallback.Kind = "codex"
+	}
+	switch fallback.Kind {
+	case "codex", "claude-code":
+	default:
+		return fmt.Errorf("agent.fallback.kind must be \"codex\" or \"claude-code\", got %q", fallback.Kind)
+	}
+	if fallback.Kind == c.Agent.Kind {
+		return fmt.Errorf("agent.fallback.kind must differ from agent.kind, got %q", fallback.Kind)
+	}
+	if len(fallback.On) == 0 && c.Agent.Kind == "claude-code" && fallback.Kind == "codex" {
+		fallback.On = []string{"claude_limit"}
+	}
+	for _, reason := range fallback.On {
+		if reason != "claude_limit" {
+			return fmt.Errorf("agent.fallback.on supports only \"claude_limit\", got %q", reason)
+		}
+	}
+	if len(fallback.On) == 0 {
+		return errors.New("agent.fallback.on must include at least one reason")
+	}
+	if fallback.Command == "" {
+		fallback.Command = defaultAgentCommand(fallback.Kind)
+	}
+	return nil
+}
+
+func defaultAgentCommand(kind string) string {
+	switch kind {
+	case "codex":
+		return `mkdir -p .tmp
+TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp" codex exec --sandbox workspace-write --skip-git-repo-check < "$SYMPHONY_PROMPT_FILE"`
+	case "claude-code":
+		return `cat "$SYMPHONY_PROMPT_FILE" | claude -p --dangerously-skip-permissions`
+	default:
+		return ""
+	}
+}
+
+func normalizeFallbackReasons(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func deriveRestEndpoint(graphQLEndpoint string) string {

@@ -47,6 +47,7 @@ type runHandle struct {
 	startedAt    time.Time
 	retryCount   int
 	turnCount    int
+	agentKind    string
 	loopReported bool
 }
 
@@ -227,13 +228,13 @@ func (s *Service) canDispatch(issue tracker.Issue) bool {
 
 func (s *Service) dispatch(parent context.Context, issue tracker.Issue, retryCount int) {
 	ctx, cancel := context.WithCancel(parent)
-	handle := &runHandle{cancel: cancel, issue: issue, startedAt: time.Now(), retryCount: retryCount}
+	handle := &runHandle{cancel: cancel, issue: issue, startedAt: time.Now(), retryCount: retryCount, agentKind: s.cfg.Agent.Kind}
 
 	s.mu.Lock()
 	s.running[issue.ID] = handle
 	s.mu.Unlock()
 
-	s.logger.Info("dispatching issue", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "state", issue.State, "retry", retryCount)
+	s.logger.Info("dispatching issue", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "state", issue.State, "retry", retryCount, "agent_kind", s.cfg.Agent.Kind)
 
 	go func() {
 		err := s.runIssue(ctx, issue)
@@ -283,18 +284,72 @@ func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) error {
 	}
 	s.upsertWorkpad(ctx, issue, s.workpadBody(issue, "Running", path, "Workspace prepared and agent execution started."))
 
+	if state, ok := completedFallbackState(path, issue); ok {
+		note := fallbackTransitionWorkpadNote(state.OriginalAgentKind, state.FallbackAgentKind) + "; completed fallback attempt found after orchestrator restart; skipping duplicate agent execution."
+		s.logger.Info(
+			"agent fallback already completed",
+			"issue_id", issue.ID,
+			"issue_identifier", issue.Identifier,
+			"original_agent_kind", state.OriginalAgentKind,
+			"fallback_agent_kind", state.FallbackAgentKind,
+			"reason", state.Reason,
+		)
+		s.upsertWorkpad(ctx, issue, s.workpadBody(issue, "Running", path, note))
+		return nil
+	}
+
+	profile := s.primaryAgentProfile()
+	if state, fallbackProfile, ok := s.resumeFallbackProfile(path, issue); ok {
+		profile = fallbackProfile
+		s.updateRunHandleAgent(issue.ID, profile.Kind)
+		note := fallbackTransitionWorkpadNote(state.OriginalAgentKind, state.FallbackAgentKind) + "; resumed after orchestrator restart."
+		s.logger.Info(
+			"agent fallback resumed",
+			"issue_id", issue.ID,
+			"issue_identifier", issue.Identifier,
+			"original_agent_kind", state.OriginalAgentKind,
+			"fallback_agent_kind", state.FallbackAgentKind,
+			"reason", state.Reason,
+		)
+		s.upsertWorkpad(ctx, issue, s.workpadBody(issue, "Running", path, note))
+	}
+
 	for turn := 1; turn <= s.cfg.Agent.MaxTurns; turn++ {
-		if err := workspace.RunBefore(ctx, path, s.cfg.Hooks, issue, s.cfg.HookTimeout()); err != nil {
-			return fmt.Errorf("before_run hook: %w", err)
-		}
-		if err := s.runAgentTurn(ctx, path, issue, turn); err != nil {
-			s.runAfterBestEffort(ctx, path, issue)
-			s.upsertWorkpad(ctx, issue, s.workpadBody(issue, issue.State, path, s.runFailureNote(issue.State, err)))
-			return err
+		for {
+			if err := workspace.RunBefore(ctx, path, s.cfg.Hooks, issue, s.cfg.HookTimeout()); err != nil {
+				return fmt.Errorf("before_run hook: %w", err)
+			}
+			if err := s.runAgentTurnWithProfile(ctx, path, issue, turn, profile); err != nil {
+				s.runAfterBestEffort(ctx, path, issue)
+				if fallbackProfile, reason, ok := s.fallbackProfileForFailure(profile, err); ok {
+					if err := s.recordFallbackState(path, issue, turn, profile, fallbackProfile, reason); err != nil {
+						s.logger.Warn("failed to record agent fallback state", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "original_agent_kind", profile.Kind, "fallback_agent_kind", fallbackProfile.Kind, "reason", reason, "error", err)
+						s.upsertWorkpad(ctx, issue, s.workpadBody(issue, issue.State, path, fmt.Sprintf("%s limit reached, but fallback to %s could not be recorded before starting: %s; leaving issue in its current state for retry instead of moving it to %s.", profile.Kind, fallbackProfile.Kind, err.Error(), s.cfg.Tracker.HandoffState)))
+						return fmt.Errorf("record agent fallback state: %w", err)
+					}
+					s.updateRunHandleAgent(issue.ID, fallbackProfile.Kind)
+					s.logger.Warn(
+						"agent fallback triggered",
+						"issue_id", issue.ID,
+						"issue_identifier", issue.Identifier,
+						"original_agent_kind", profile.Kind,
+						"fallback_agent_kind", fallbackProfile.Kind,
+						"reason", reason,
+					)
+					s.upsertWorkpad(ctx, issue, s.workpadBody(issue, "Running", path, fallbackTransitionWorkpadNote(profile.Kind, fallbackProfile.Kind)))
+					profile = fallbackProfile
+					continue
+				}
+				s.markFallbackStateFailed(path, issue, profile, err)
+				s.upsertWorkpad(ctx, issue, s.workpadBody(issue, issue.State, path, s.runFailureNoteForProfile(issue, path, profile, err)))
+				return err
+			}
+			break
 		}
 		s.runAfterBestEffort(ctx, path, issue)
+		s.markFallbackStateCompleted(path, issue)
 		s.recordCompletedTurn(issue.ID, turn)
-		s.upsertWorkpad(ctx, issue, s.workpadBody(issue, "Running", path, fmt.Sprintf("Completed turn %d.", turn)))
+		s.upsertWorkpad(ctx, issue, s.workpadBody(issue, "Running", path, s.completedTurnNote(path, issue, profile, turn)))
 
 		refreshed, active, err := s.refreshIssue(ctx, issue.ID)
 		if err != nil {
@@ -322,6 +377,14 @@ func (s *Service) recordCompletedTurn(issueID string, turn int) {
 	defer s.mu.Unlock()
 	if handle, ok := s.running[issueID]; ok && turn > handle.turnCount {
 		handle.turnCount = turn
+	}
+}
+
+func (s *Service) updateRunHandleAgent(issueID, agentKind string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if handle, ok := s.running[issueID]; ok {
+		handle.agentKind = agentKind
 	}
 }
 
@@ -420,6 +483,7 @@ func (s *Service) handleSuccessfulRun(ctx context.Context, issue tracker.Issue) 
 	if !active {
 		return
 	}
+	fallbackState, usedFallback := s.fallbackStateForIssue(refreshed)
 	if s.cfg.Tracker.HandoffState != "" && !sameState(refreshed.State, s.cfg.Tracker.HandoffState) {
 		if err := s.updateIssueState(ctx, refreshed, s.cfg.Tracker.HandoffState); err != nil {
 			s.logger.Warn("failed to move issue to handoff state", "issue_id", refreshed.ID, "issue_identifier", refreshed.Identifier, "state", s.cfg.Tracker.HandoffState, "error", err)
@@ -428,21 +492,29 @@ func (s *Service) handleSuccessfulRun(ctx context.Context, issue tracker.Issue) 
 		s.logStateTransition(refreshed, refreshed.State, s.cfg.Tracker.HandoffState, "agent_run_completed")
 		refreshed.State = s.cfg.Tracker.HandoffState
 	}
-	s.upsertWorkpad(ctx, refreshed, s.workpadBody(refreshed, "Human Review", "", "Agent run completed and issue is ready for review."))
+	note := "Agent run completed and issue is ready for review."
+	if usedFallback {
+		note = fallbackTransitionWorkpadNote(fallbackState.OriginalAgentKind, fallbackState.FallbackAgentKind) + "; agent run completed and issue is ready for review."
+	}
+	s.upsertWorkpad(ctx, refreshed, s.workpadBody(refreshed, "Human Review", "", note))
 }
 
 func (s *Service) runAgentTurn(parent context.Context, path string, issue tracker.Issue, turn int) error {
+	return s.runAgentTurnWithProfile(parent, path, issue, turn, s.primaryAgentProfile())
+}
+
+func (s *Service) runAgentTurnWithProfile(parent context.Context, path string, issue tracker.Issue, turn int, profile agentProfile) error {
 	prompt, err := renderPrompt(s.promptTemplate, issue, turn)
 	if err != nil {
 		return err
 	}
 
-	if strings.TrimSpace(s.cfg.Agent.Command) == "" {
+	if strings.TrimSpace(profile.Command) == "" {
 		promptPath, err := writeWorkspacePrompt(path, prompt)
 		if err != nil {
 			return err
 		}
-		s.logger.Info("agent.command is empty; wrote prompt only", "issue_identifier", issue.Identifier, "prompt", promptPath)
+		s.logger.Info("agent.command is empty; wrote prompt only", "issue_identifier", issue.Identifier, "prompt", promptPath, "agent_kind", profile.Kind)
 		return nil
 	}
 
@@ -455,18 +527,29 @@ func (s *Service) runAgentTurn(parent context.Context, path string, issue tracke
 	ctx, cancel := context.WithTimeout(parent, s.cfg.TurnTimeout())
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "bash", "-lc", s.cfg.Agent.Command)
+	cmd := exec.CommandContext(ctx, "bash", "-lc", profile.Command)
 	cmd.Dir = path
 	cmd.Env = append(os.Environ(),
 		"SYMPHONY_PROMPT_FILE="+promptPath,
 		"SYMPHONY_TURN="+fmt.Sprint(turn),
+		"SYMPHONY_AGENT_KIND="+profile.Kind,
 	)
 	cmd.Env = append(cmd.Env, issue.Env()...)
 	output := &agentOutputActivity{}
 	cmd.Stdout = io.MultiWriter(os.Stdout, output)
 	cmd.Stderr = io.MultiWriter(os.Stderr, output)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("agent command: %w", err)
+		exitCode := -1
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		}
+		return &agentCommandError{
+			kind:     profile.Kind,
+			exitCode: exitCode,
+			output:   output.String(),
+			err:      err,
+		}
 	}
 	if !output.Seen() {
 		return errAgentCommandNoOutput
@@ -475,14 +558,27 @@ func (s *Service) runAgentTurn(parent context.Context, path string, issue tracke
 }
 
 type agentOutputActivity struct {
-	mu   sync.Mutex
-	seen bool
+	mu        sync.Mutex
+	seen      bool
+	output    bytes.Buffer
+	truncated bool
 }
 
 func (a *agentOutputActivity) Write(p []byte) (int, error) {
 	if len(bytes.TrimSpace(p)) > 0 {
 		a.mu.Lock()
 		a.seen = true
+		if a.output.Len() < maxAgentOutputCaptureBytes {
+			remaining := maxAgentOutputCaptureBytes - a.output.Len()
+			if len(p) > remaining {
+				_, _ = a.output.Write(p[:remaining])
+				a.truncated = true
+			} else {
+				_, _ = a.output.Write(p)
+			}
+		} else {
+			a.truncated = true
+		}
 		a.mu.Unlock()
 	}
 	return len(p), nil
@@ -492,6 +588,16 @@ func (a *agentOutputActivity) Seen() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.seen
+}
+
+func (a *agentOutputActivity) String() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := a.output.String()
+	if a.truncated {
+		out += "\n[agent output truncated]"
+	}
+	return out
 }
 
 func (s *Service) runFailureNote(state string, err error) string {

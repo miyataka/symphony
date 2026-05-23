@@ -494,6 +494,107 @@ func TestParseConfigDefaultsClaudeCodeCommand(t *testing.T) {
 	}
 }
 
+func TestParseConfigDefaultsClaudeCodeFallbackToCodex(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"agent": map[string]any{
+			"kind": "claude-code",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Fallback.Enabled == nil || !*cfg.Agent.Fallback.Enabled {
+		t.Fatalf("expected claude-code fallback to default enabled, got %#v", cfg.Agent.Fallback.Enabled)
+	}
+	if cfg.Agent.Fallback.Kind != "codex" {
+		t.Fatalf("expected fallback kind codex, got %q", cfg.Agent.Fallback.Kind)
+	}
+	if len(cfg.Agent.Fallback.On) != 1 || cfg.Agent.Fallback.On[0] != "claude_limit" {
+		t.Fatalf("expected fallback_on claude_limit, got %#v", cfg.Agent.Fallback.On)
+	}
+	if !strings.Contains(cfg.Agent.Fallback.Command, "codex exec") {
+		t.Fatalf("expected fallback command to use codex, got %q", cfg.Agent.Fallback.Command)
+	}
+}
+
+func TestParseConfigCanDisableClaudeCodeFallback(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"agent": map[string]any{
+			"kind": "claude-code",
+			"fallback": map[string]any{
+				"enabled": false,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Fallback.Enabled == nil || *cfg.Agent.Fallback.Enabled {
+		t.Fatalf("expected claude-code fallback disabled, got %#v", cfg.Agent.Fallback.Enabled)
+	}
+	if cfg.Agent.Fallback.Kind != "" || cfg.Agent.Fallback.Command != "" || len(cfg.Agent.Fallback.On) != 0 {
+		t.Fatalf("expected disabled fallback not to receive defaults, got %#v", cfg.Agent.Fallback)
+	}
+}
+
+func TestParseConfigAcceptsLegacyClaudeCodeFallbackShape(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"agent": map[string]any{
+			"kind":           "claude-code",
+			"fallback_kinds": []string{"codex"},
+			"fallback_on":    []string{"claude_limit"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Fallback.Kind != "codex" {
+		t.Fatalf("expected legacy fallback_kinds to configure codex, got %q", cfg.Agent.Fallback.Kind)
+	}
+	if len(cfg.Agent.Fallback.On) != 1 || cfg.Agent.Fallback.On[0] != "claude_limit" {
+		t.Fatalf("expected legacy fallback_on claude_limit, got %#v", cfg.Agent.Fallback.On)
+	}
+}
+
+func TestParseConfigAcceptsFallbackCommandOverride(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"agent": map[string]any{
+			"kind": "claude-code",
+			"fallback": map[string]any{
+				"kind":    "codex",
+				"on":      []string{"claude_limit"},
+				"command": "codex exec --model gpt-5.4 < \"$SYMPHONY_PROMPT_FILE\"",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Fallback.Command != "codex exec --model gpt-5.4 < \"$SYMPHONY_PROMPT_FILE\"" {
+		t.Fatalf("expected custom fallback command preserved, got %q", cfg.Agent.Fallback.Command)
+	}
+}
+
 func TestParseConfigPreservesExplicitClaudeCodeCommand(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-token")
 	cfg, err := ParseConfig(map[string]any{
