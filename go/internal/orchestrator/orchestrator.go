@@ -16,6 +16,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/miyataka/symphony/go/internal/statusdashboard"
 	"github.com/miyataka/symphony/go/internal/tracker"
 	"github.com/miyataka/symphony/go/internal/workflow"
 	"github.com/miyataka/symphony/go/internal/workspace"
@@ -66,6 +67,29 @@ func New(opts Options) *Service {
 			Hooks: opts.Config.Hooks,
 		},
 		running: map[string]*runHandle{},
+	}
+}
+
+func (s *Service) Snapshot() statusdashboard.Snapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	running := make([]statusdashboard.RunningEntry, 0, len(s.running))
+	for _, handle := range s.running {
+		running = append(running, statusdashboard.RunningEntry{
+			Identifier: handle.issue.Identifier,
+			State:      handle.issue.State,
+			AgentKind:  handle.agentKind,
+			RetryCount: handle.retryCount,
+			TurnCount:  handle.turnCount,
+			StartedAt:  handle.startedAt,
+		})
+	}
+
+	return statusdashboard.Snapshot{
+		Running:   running,
+		MaxAgents: s.cfg.Agent.MaxConcurrentAgents,
+		Now:       time.Now(),
 	}
 }
 

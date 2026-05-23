@@ -62,11 +62,19 @@ observability:
   log_json: true
   log_level: info
   log_file: ~/symphony-logs/runtime.log
+  dashboard_enabled: true
+  refresh_ms: 1000
+  render_interval_ms: 16
 ```
 
 When `log_file` is set, Symphony appends structured events to the file *and* mirrors them to
-stdout. The path supports `~/` and `$ENV` expansion, and any missing parent directories are
-created at startup. The file is opened in append mode so restarts preserve prior history.
+stdout. When the terminal dashboard is enabled, the dashboard owns stdout and mirrored logs are
+written to stderr instead. The path supports `~/` and `$ENV` expansion, and any missing parent
+directories are created at startup. The file is opened in append mode so restarts preserve prior
+history.
+
+The terminal dashboard is enabled by default and renders a compact lipgloss status frame with the
+current running agents. Set `observability.dashboard_enabled: false` to keep stdout log-only.
 
 Without `log_file`, you can still capture stdout from another session via `tee`:
 

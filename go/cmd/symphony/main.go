@@ -10,11 +10,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/miyataka/symphony/go/internal/githubtracker"
 	"github.com/miyataka/symphony/go/internal/orchestrator"
+	"github.com/miyataka/symphony/go/internal/statusdashboard"
 	"github.com/miyataka/symphony/go/internal/workflow"
 )
 
@@ -46,7 +49,7 @@ func run(args []string) {
 		os.Exit(1)
 	}
 
-	logWriter, closeLog, err := openLogWriter(cfg.Observability.LogFile)
+	logWriter, closeLog, err := openRunLogWriter(cfg.Observability.LogFile, cfg.Observability.DashboardEnabled)
 	if err != nil {
 		logger.Error("failed to open observability log file", "path", cfg.Observability.LogFile, "error", err)
 		os.Exit(1)
@@ -73,6 +76,21 @@ func run(args []string) {
 		Logger:         logger,
 	})
 
+	if cfg.Observability.DashboardEnabled {
+		go func() {
+			runner := statusdashboard.Runner{
+				Writer:          os.Stdout,
+				RefreshInterval: time.Duration(cfg.Observability.RefreshMS) * time.Millisecond,
+				RenderInterval:  time.Duration(cfg.Observability.RenderIntervalMS) * time.Millisecond,
+				Options:         statusdashboard.Options{Width: dashboardWidth(), Color: true},
+				Snapshot:        service.Snapshot,
+			}
+			if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
+				logger.Warn("status dashboard stopped", "error", err)
+			}
+		}()
+	}
+
 	if err := service.Run(ctx); err != nil && ctx.Err() == nil {
 		logger.Error("symphony stopped with error", "error", err)
 		os.Exit(1)
@@ -88,8 +106,16 @@ func newLogger(logJSON bool, levelName string, w io.Writer) *slog.Logger {
 }
 
 func openLogWriter(path string) (io.Writer, func() error, error) {
+	return openRunLogWriter(path, false)
+}
+
+func openRunLogWriter(path string, dashboardEnabled bool) (io.Writer, func() error, error) {
+	console := io.Writer(os.Stdout)
+	if dashboardEnabled {
+		console = os.Stderr
+	}
 	if strings.TrimSpace(path) == "" {
-		return os.Stdout, func() error { return nil }, nil
+		return console, func() error { return nil }, nil
 	}
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -100,7 +126,15 @@ func openLogWriter(path string) (io.Writer, func() error, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("open log file %q: %w", path, err)
 	}
-	return io.MultiWriter(os.Stdout, file), file.Close, nil
+	return io.MultiWriter(console, file), file.Close, nil
+}
+
+func dashboardWidth() int {
+	columns, err := strconv.Atoi(strings.TrimSpace(os.Getenv("COLUMNS")))
+	if err == nil && columns > 0 {
+		return columns
+	}
+	return 100
 }
 
 func slogLevel(name string) slog.Level {
