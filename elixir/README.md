@@ -95,6 +95,12 @@ workspace:
 hooks:
   after_create: |
     git clone git@github.com:your-org/your-repo.git .
+  before_run: |
+    git fetch origin --prune
+  after_run: |
+    git add -A -- . ':(exclude).symphony' ':(exclude).tmp'
+    git commit -m "$SYMPHONY_ISSUE_IDENTIFIER: agent update"
+    git push -u origin "$SYMPHONY_BRANCH"
 agent:
   max_concurrent_agents: 10
   max_turns: 20
@@ -125,6 +131,13 @@ Notes:
   identifier, title, and body.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run
   `git clone ... .` there, along with any other setup commands you need.
+- Use `hooks.before_run` and `hooks.after_run` for Git and GitHub publishing operations that should
+  run outside the Codex turn sandbox. Hooks receive `SYMPHONY_ISSUE_ID`,
+  `SYMPHONY_ISSUE_IDENTIFIER`, `SYMPHONY_ISSUE_TITLE`, `SYMPHONY_ISSUE_STATE`,
+  `SYMPHONY_ISSUE_URL`, and `SYMPHONY_BRANCH`.
+- When Codex runs with `workspace-write`, do not rely on the agent to write `.git` metadata or read
+  `gh` keychain credentials. Let hooks fetch, branch, commit, push, and create or update pull
+  requests.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
 - `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.

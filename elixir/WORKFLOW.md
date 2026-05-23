@@ -19,10 +19,54 @@ workspace:
   root: ~/code/symphony-workspaces
 hooks:
   after_create: |
-    git clone --depth 1 https://github.com/miyataka/symphony .
+    set -eu
+    git clone https://github.com/miyataka/symphony.git .
+    git fetch origin --prune
+    base_branch="$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||')"
+    git checkout -B "$SYMPHONY_BRANCH" "origin/$base_branch"
+    {
+      echo ".symphony/"
+      echo ".tmp/"
+    } >> .git/info/exclude
     if command -v mise >/dev/null 2>&1; then
       cd elixir && mise trust && mise exec -- mix deps.get
     fi
+  before_run: |
+    set -eu
+    git fetch origin --prune
+    base_branch="$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|^origin/||')"
+    if git show-ref --verify --quiet "refs/heads/$SYMPHONY_BRANCH"; then
+      git checkout "$SYMPHONY_BRANCH"
+    else
+      git checkout -B "$SYMPHONY_BRANCH" "origin/$base_branch"
+    fi
+    git merge --no-edit "origin/$base_branch"
+  after_run: |
+    set -eu
+    git rm -f --ignore-unmatch .symphony/prompt.md >/dev/null 2>&1 || true
+    changes="$(git status --porcelain -- . ':(exclude).symphony' ':(exclude).tmp')"
+    prompt_cleanup="$(git diff --cached --name-only -- .symphony/prompt.md)"
+    if [ -z "$changes$prompt_cleanup" ]; then
+      echo "no non-Symphony workspace changes to commit" >&2
+      exit 0
+    fi
+    git add -A -- . ':(exclude).symphony' ':(exclude).tmp'
+    git commit -m "$SYMPHONY_ISSUE_IDENTIFIER: agent update"
+    git push -u origin "$SYMPHONY_BRANCH"
+    body_file="$(mktemp)"
+    cat >"$body_file" <<EOF
+    Automated work for $SYMPHONY_ISSUE_URL
+
+    Linear issue: $SYMPHONY_ISSUE_URL
+    EOF
+    if gh pr view "$SYMPHONY_BRANCH" --repo miyataka/symphony >/dev/null 2>&1; then
+      gh pr edit "$SYMPHONY_BRANCH" --repo miyataka/symphony \
+        --title "$SYMPHONY_ISSUE_TITLE" --body-file "$body_file" --add-label symphony
+    else
+      gh pr create --repo miyataka/symphony --head "$SYMPHONY_BRANCH" \
+        --title "$SYMPHONY_ISSUE_TITLE" --body-file "$body_file" --label symphony
+    fi
+    rm -f "$body_file"
   before_remove: |
     cd elixir && mise exec -- mix workspace.before_remove
 agent:
@@ -69,6 +113,7 @@ Instructions:
 1. This is an unattended orchestration session. Never ask a human to perform follow-up actions.
 2. Only stop early for a true blocker (missing required auth/permissions/secrets). If blocked, record it in the workpad and move the issue according to workflow.
 3. Final message must report completed actions and blockers only. Do not include "next steps for user".
+4. Do not run `git commit`, `git push`, `gh pr create`, or `gh pr edit`; Symphony hooks publish the branch and PR after the turn.
 
 Work only in the provided repository copy. Do not touch any other path.
 
@@ -99,9 +144,9 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 ## Related skills
 
 - `linear`: interact with Linear.
-- `commit`: produce clean, logical commits during implementation.
-- `push`: keep remote branch current and publish updates.
-- `pull`: keep branch updated with latest `origin/main` before handoff.
+- `commit`: do not use during normal execution; Symphony hooks commit after a successful turn.
+- `push`: do not use during normal execution; Symphony hooks push and publish the PR after a successful turn.
+- `pull`: do not use during normal execution; Symphony hooks fetch and merge `origin/main` before each turn.
 - `land`: when ticket reaches `Merging`, explicitly open and follow `.codex/skills/land/SKILL.md`, which includes the `land` loop.
 
 ## Status map
@@ -161,8 +206,8 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
     - If the ticket description/comment context includes `Validation`, `Test Plan`, or `Testing` sections, copy those requirements into the workpad `Acceptance Criteria` and `Validation` sections as required checkboxes (no optional downgrade).
 7.  Run a principal-style self-review of the plan and refine it in the comment.
 8.  Before implementing, capture a concrete reproduction signal and record it in the workpad `Notes` section (command/output, screenshot, or deterministic UI behavior).
-9.  Run the `pull` skill to sync with latest `origin/main` before any code edits, then record the pull/sync result in the workpad `Notes`.
-    - Include a `pull skill evidence` note with:
+9.  Confirm the hook-provided branch sync state before any code edits, then record the sync result in the workpad `Notes`.
+    - Include a `hook sync evidence` note with:
       - merge source(s),
       - result (`clean` or `conflicts resolved`),
       - resulting `HEAD` short SHA.
@@ -217,10 +262,10 @@ Use this only when completion is blocked by missing required tools or missing au
     - Document these temporary proof steps and outcomes in the workpad `Validation`/`Notes` sections so reviewers can follow the evidence.
     - If app-touching, run `launch-app` validation and capture/upload media via `github-pr-media` before handoff.
 6.  Re-check all acceptance criteria and close any gaps.
-7.  Before every `git push` attempt, run the required validation for your scope and confirm it passes; if it fails, address issues and rerun until green, then commit and push changes.
-8.  Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
-    - Ensure the GitHub PR has label `symphony` (add it if missing).
-9.  Merge latest `origin/main` into branch, resolve conflicts, and rerun checks.
+7.  Before handoff, run the required validation for your scope and confirm it passes; if it fails, address issues and rerun until green. Leave commit, push, and PR publication to Symphony hooks.
+8.  Confirm the PR URL after hooks publish it when available (prefer attachment; use the workpad comment only if attachment is unavailable).
+    - The publish hook is responsible for adding the GitHub PR label `symphony`.
+9.  Confirm the branch already includes the `before_run` hook sync from latest `origin/main`; resolve any working-tree conflicts if the hook surfaced them before the turn.
 10. Update the workpad comment with final checklist status and validation notes.
     - Mark completed plan/acceptance/validation checklist items as checked.
     - Add final handoff notes (commit + validation summary) in the same workpad comment.
