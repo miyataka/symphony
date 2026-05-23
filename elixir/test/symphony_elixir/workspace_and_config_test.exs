@@ -632,6 +632,50 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "workspace hooks receive issue metadata environment" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-hook-env-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      File.mkdir_p!(workspace_root)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        hook_after_create: """
+        printf '%s\\n' "$SYMPHONY_ISSUE_ID" > issue-id.txt
+        printf '%s\\n' "$SYMPHONY_ISSUE_IDENTIFIER" > issue-identifier.txt
+        printf '%s\\n' "$SYMPHONY_ISSUE_TITLE" > issue-title.txt
+        printf '%s\\n' "$SYMPHONY_ISSUE_STATE" > issue-state.txt
+        printf '%s\\n' "$SYMPHONY_ISSUE_URL" > issue-url.txt
+        printf '%s\\n' "$SYMPHONY_BRANCH" > issue-branch.txt
+        """
+      )
+
+      issue = %Issue{
+        id: "linear-id-1",
+        identifier: "SYM-123",
+        title: "Publish from hooks",
+        state: "In Progress",
+        url: "https://linear.app/example/issue/SYM-123",
+        branch_name: "feature/sym-123-publish-from-hooks"
+      }
+
+      assert {:ok, workspace} = Workspace.create_for_issue(issue)
+      assert File.read!(Path.join(workspace, "issue-id.txt")) == "linear-id-1\n"
+      assert File.read!(Path.join(workspace, "issue-identifier.txt")) == "SYM-123\n"
+      assert File.read!(Path.join(workspace, "issue-title.txt")) == "Publish from hooks\n"
+      assert File.read!(Path.join(workspace, "issue-state.txt")) == "In Progress\n"
+      assert File.read!(Path.join(workspace, "issue-url.txt")) == "https://linear.app/example/issue/SYM-123\n"
+      assert File.read!(Path.join(workspace, "issue-branch.txt")) == "feature/sym-123-publish-from-hooks\n"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "workspace remove continues when before_remove hook fails" do
     test_root =
       Path.join(

@@ -105,12 +105,22 @@ defmodule SymphonyElixir.CoreTest do
 
     hooks = Map.get(config, "hooks", %{})
     assert is_map(hooks)
-    assert Map.get(hooks, "after_create") =~ "git clone --depth 1 https://github.com/miyataka/symphony ."
+    assert Map.get(hooks, "after_create") =~ "git clone https://github.com/miyataka/symphony.git ."
+    assert Map.get(hooks, "after_create") =~ "git checkout -B \"$SYMPHONY_BRANCH\""
+    assert Map.get(hooks, "before_run") =~ "git fetch origin --prune"
+    assert Map.get(hooks, "before_run") =~ "git merge --no-edit"
+    assert Map.get(hooks, "after_run") =~ "git add -A -- . ':(exclude).symphony' ':(exclude).tmp'"
+    assert Map.get(hooks, "after_run") =~ "git commit -m \"$SYMPHONY_ISSUE_IDENTIFIER: agent update\""
+    assert Map.get(hooks, "after_run") =~ "git push -u origin \"$SYMPHONY_BRANCH\""
+    assert Map.get(hooks, "after_run") =~ "gh pr create"
+    assert Map.get(hooks, "after_run") =~ "gh pr edit"
     assert Map.get(hooks, "after_create") =~ "cd elixir && mise trust"
     assert Map.get(hooks, "after_create") =~ "mise exec -- mix deps.get"
     assert Map.get(hooks, "before_remove") =~ "cd elixir && mise exec -- mix workspace.before_remove"
 
     assert String.trim(prompt) != ""
+    assert prompt =~ "Do not run `git commit`, `git push`, `gh pr create`, or `gh pr edit`"
+    assert prompt =~ "Symphony hooks publish the branch and PR after the turn"
     assert is_binary(Config.workflow_prompt())
     assert Config.workflow_prompt() == prompt
   end
