@@ -91,6 +91,25 @@ func TestOpenLogWriterEmptyPathReturnsStdout(t *testing.T) {
 	}
 }
 
+func TestOpenRunLogWriterUsesStderrWhenDashboardIsEnabled(t *testing.T) {
+	w, closer, err := openRunLogWriter("", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer()
+	if w != os.Stderr {
+		t.Fatalf("expected os.Stderr for dashboard console logs, got %T", w)
+	}
+}
+
+func TestDashboardWidthUsesColumnsEnv(t *testing.T) {
+	t.Setenv("COLUMNS", "72")
+
+	if got := dashboardWidth(); got != 72 {
+		t.Fatalf("expected COLUMNS width, got %d", got)
+	}
+}
+
 func TestOpenLogWriterAppendsAndCreatesParentDir(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "nested", "symphony.log")

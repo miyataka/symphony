@@ -101,9 +101,12 @@ type AgentConfig struct {
 }
 
 type ObservabilityConfig struct {
-	LogJSON  bool   `yaml:"log_json"`
-	LogLevel string `yaml:"log_level"`
-	LogFile  string `yaml:"log_file"`
+	LogJSON          bool   `yaml:"log_json"`
+	LogLevel         string `yaml:"log_level"`
+	LogFile          string `yaml:"log_file"`
+	DashboardEnabled bool   `yaml:"dashboard_enabled"`
+	RefreshMS        int    `yaml:"refresh_ms"`
+	RenderIntervalMS int    `yaml:"render_interval_ms"`
 }
 
 type LoopMonitorConfig struct {
@@ -236,6 +239,11 @@ func defaultConfig() Config {
 			MinTurns:      3,
 			SubIssueState: "Backlog",
 		},
+		Observability: ObservabilityConfig{
+			DashboardEnabled: true,
+			RefreshMS:        int(time.Second / time.Millisecond),
+			RenderIntervalMS: 16,
+		},
 	}
 }
 
@@ -352,6 +360,12 @@ func (c *Config) Resolve() error {
 		return fmt.Errorf("observability.log_level must be debug, info, warn, or error, got %q", c.Observability.LogLevel)
 	}
 	c.Observability.LogFile = expandPath(resolveEnv(c.Observability.LogFile))
+	if c.Observability.RefreshMS <= 0 {
+		return errors.New("observability.refresh_ms must be > 0")
+	}
+	if c.Observability.RenderIntervalMS <= 0 {
+		return errors.New("observability.render_interval_ms must be > 0")
+	}
 
 	switch c.Tracker.Kind {
 	case "github":

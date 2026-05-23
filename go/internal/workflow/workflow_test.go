@@ -185,8 +185,11 @@ func TestParseConfigResolvesObservabilityOptions(t *testing.T) {
 			"project_number": 1,
 		},
 		"observability": map[string]any{
-			"log_json":  true,
-			"log_level": "DEBUG",
+			"log_json":           true,
+			"log_level":          "DEBUG",
+			"dashboard_enabled":  false,
+			"refresh_ms":         2500,
+			"render_interval_ms": 33,
 		},
 	})
 	if err != nil {
@@ -197,6 +200,12 @@ func TestParseConfigResolvesObservabilityOptions(t *testing.T) {
 	}
 	if cfg.Observability.LogLevel != "debug" {
 		t.Fatalf("unexpected log level: %q", cfg.Observability.LogLevel)
+	}
+	if cfg.Observability.DashboardEnabled {
+		t.Fatal("expected dashboard_enabled override to be false")
+	}
+	if cfg.Observability.RefreshMS != 2500 || cfg.Observability.RenderIntervalMS != 33 {
+		t.Fatalf("unexpected dashboard timing config: %#v", cfg.Observability)
 	}
 }
 
@@ -238,6 +247,31 @@ func TestParseConfigDefaultsObservabilityLogFileToEmpty(t *testing.T) {
 	}
 	if cfg.Observability.LogFile != "" {
 		t.Fatalf("expected empty log_file by default, got %q", cfg.Observability.LogFile)
+	}
+	if !cfg.Observability.DashboardEnabled {
+		t.Fatal("expected dashboard to default enabled")
+	}
+	if cfg.Observability.RefreshMS != 1000 {
+		t.Fatalf("unexpected dashboard refresh default: %d", cfg.Observability.RefreshMS)
+	}
+	if cfg.Observability.RenderIntervalMS != 16 {
+		t.Fatalf("unexpected dashboard render interval default: %d", cfg.Observability.RenderIntervalMS)
+	}
+}
+
+func TestParseConfigRejectsInvalidDashboardTiming(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	_, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"observability": map[string]any{
+			"refresh_ms": 0,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected invalid refresh_ms error")
 	}
 }
 
