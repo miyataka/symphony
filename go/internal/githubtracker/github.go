@@ -32,13 +32,22 @@ type Client struct {
 
 	rateLimitMu      sync.Mutex
 	graphQLRateLimit *githubRateLimit
+
+	blockerCacheMu sync.Mutex
+	blockerCache   map[string]cachedBlockers
 }
 
 const graphQLRemainingBackoffThreshold = 100
+const issueBlockerCacheTTL = 5 * time.Minute
 
 type githubRateLimit struct {
 	Remaining int
 	Reset     time.Time
+}
+
+type cachedBlockers struct {
+	Blockers  []tracker.Blocker
+	ExpiresAt time.Time
 }
 
 func New(cfg workflow.TrackerConfig) (*Client, error) {
@@ -123,21 +132,54 @@ func (c *Client) FetchIssueStatesByIDs(ctx context.Context, ids []string) ([]tra
 	}
 	allStates := issueFetchStates(c.cfg)
 	allStates = append(allStates, c.cfg.TerminalStates...)
-	issues, err := c.FetchIssuesByStates(ctx, allStates)
-	if err != nil {
-		return nil, err
-	}
+	stateSet := normalizedSet(allStates)
 	want := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		want[id] = struct{}{}
 	}
-	filtered := issues[:0]
-	for _, issue := range issues {
-		if _, ok := want[issue.ID]; ok {
-			filtered = append(filtered, issue)
+
+	var out []tracker.Issue
+	var cursor *string
+	summary := newFetchSummary()
+	for {
+		page, err := c.fetchProjectItems(ctx, cursor)
+		if err != nil {
+			return nil, err
 		}
+		for _, item := range page.Items {
+			summary.ProjectItems++
+			issue, reason, ok := c.normalizeItem(item)
+			if !ok {
+				summary.Skip(reason, projectItemLabel(item))
+				continue
+			}
+			summary.Issues++
+			if _, ok := want[issue.ID]; !ok {
+				continue
+			}
+			if _, ok := stateSet[normalize(issue.State)]; !ok {
+				summary.Skip("state", fmt.Sprintf("%s status=%q", issue.Identifier, issue.State))
+				continue
+			}
+			if c.cfg.Assignee != "" && !item.Content.HasAssignee(c.cfg.Assignee) {
+				summary.Skip("assignee", issue.Identifier)
+				continue
+			}
+			if !c.repositoryAllowed(issue.RepositoryNameWithOwner) {
+				summary.Skip("repository", issue.Identifier)
+				continue
+			}
+			out = append(out, issue)
+		}
+		if !page.HasNextPage {
+			break
+		}
+		cursor = page.EndCursor
 	}
-	return filtered, nil
+
+	c.logFetchSummary(allStates, summary, len(out))
+	sortTrackerIssues(out)
+	return out, nil
 }
 
 func issueFetchStates(cfg workflow.TrackerConfig) []string {
@@ -214,22 +256,7 @@ func (c *Client) FetchIssuesByStates(ctx context.Context, states []string) ([]tr
 		return nil, err
 	}
 
-	sort.SliceStable(out, func(i, j int) bool {
-		left, right := out[i], out[j]
-		if left.Priority != nil && right.Priority != nil && *left.Priority != *right.Priority {
-			return *left.Priority < *right.Priority
-		}
-		if left.Priority != nil && right.Priority == nil {
-			return true
-		}
-		if left.Priority == nil && right.Priority != nil {
-			return false
-		}
-		if left.CreatedAt != nil && right.CreatedAt != nil && !left.CreatedAt.Equal(*right.CreatedAt) {
-			return left.CreatedAt.Before(*right.CreatedAt)
-		}
-		return left.Identifier < right.Identifier
-	})
+	sortTrackerIssues(out)
 	return out, nil
 }
 
@@ -240,6 +267,10 @@ func (c *Client) fetchOpenIssueBlockers(ctx context.Context, issue issueContent)
 	owner, repo, ok := strings.Cut(issue.Repository.NameWithOwner, "/")
 	if !ok || owner == "" || repo == "" {
 		return nil, nil
+	}
+	cacheKey := issueBlockerCacheKey(issue)
+	if blockers, ok := c.cachedIssueBlockers(cacheKey); ok {
+		return blockers, nil
 	}
 
 	var out []tracker.Blocker
@@ -270,7 +301,63 @@ func (c *Client) fetchOpenIssueBlockers(ctx context.Context, issue issueContent)
 			break
 		}
 	}
+	c.storeIssueBlockers(cacheKey, out)
 	return out, nil
+}
+
+func issueBlockerCacheKey(issue issueContent) string {
+	if issue.ID != "" {
+		return issue.ID + "|" + issue.UpdatedAt
+	}
+	return issue.Repository.NameWithOwner + "#" + strconv.Itoa(issue.Number) + "|" + issue.UpdatedAt
+}
+
+func (c *Client) cachedIssueBlockers(key string) ([]tracker.Blocker, bool) {
+	if key == "" {
+		return nil, false
+	}
+	now := c.now
+	if now == nil {
+		now = time.Now
+	}
+	c.blockerCacheMu.Lock()
+	defer c.blockerCacheMu.Unlock()
+	cached, ok := c.blockerCache[key]
+	if !ok || !now().Before(cached.ExpiresAt) {
+		if ok {
+			delete(c.blockerCache, key)
+		}
+		return nil, false
+	}
+	return cloneBlockers(cached.Blockers), true
+}
+
+func (c *Client) storeIssueBlockers(key string, blockers []tracker.Blocker) {
+	if key == "" {
+		return
+	}
+	now := c.now
+	if now == nil {
+		now = time.Now
+	}
+	c.blockerCacheMu.Lock()
+	defer c.blockerCacheMu.Unlock()
+	if c.blockerCache == nil {
+		c.blockerCache = map[string]cachedBlockers{}
+	}
+	c.blockerCache[key] = cachedBlockers{
+		Blockers:  cloneBlockers(blockers),
+		ExpiresAt: now().Add(issueBlockerCacheTTL),
+	}
+}
+
+func cloneBlockers(blockers []tracker.Blocker) []tracker.Blocker {
+	if len(blockers) == 0 {
+		return nil
+	}
+	out := make([]tracker.Blocker, len(blockers))
+	copy(out, blockers)
+	return out
 }
 
 func (c *Client) restJSON(ctx context.Context, url string, dest any) error {
@@ -470,6 +557,25 @@ func (c *Client) logFetchSummary(states []string, summary fetchSummary, matched 
 		"examples_assignee", strings.Join(summary.SkippedExample["assignee"], ", "),
 		"examples_repository", strings.Join(summary.SkippedExample["repository"], ", "),
 	)
+}
+
+func sortTrackerIssues(issues []tracker.Issue) {
+	sort.SliceStable(issues, func(i, j int) bool {
+		left, right := issues[i], issues[j]
+		if left.Priority != nil && right.Priority != nil && *left.Priority != *right.Priority {
+			return *left.Priority < *right.Priority
+		}
+		if left.Priority != nil && right.Priority == nil {
+			return true
+		}
+		if left.Priority == nil && right.Priority != nil {
+			return false
+		}
+		if left.CreatedAt != nil && right.CreatedAt != nil && !left.CreatedAt.Equal(*right.CreatedAt) {
+			return left.CreatedAt.Before(*right.CreatedAt)
+		}
+		return left.Identifier < right.Identifier
+	})
 }
 
 func projectItemLabel(item projectItem) string {

@@ -420,6 +420,58 @@ func TestFetchIssuesByStatesHydratesOnlyMatchedIssues(t *testing.T) {
 	}
 }
 
+func TestFetchIssueStatesByIDsUsesLightweightProjectScan(t *testing.T) {
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			t.Fatalf("state refresh should not fetch issue dependencies: %s", r.URL.String())
+		}
+		var payload struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		queries = append(queries, payload.Query)
+		if strings.Contains(payload.Query, "SymphonyGitHubIssueDetails") {
+			t.Fatalf("state refresh should not hydrate issue details:\n%s", payload.Query)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		writeProjectIssueFixture(w, "miyataka/api", 10)
+	}))
+	defer server.Close()
+
+	client, err := New(workflow.TrackerConfig{
+		Token:                 "token",
+		Endpoint:              server.URL,
+		RestEndpoint:          server.URL,
+		Owner:                 "miyataka",
+		OwnerType:             "user",
+		ProjectNumber:         1,
+		StatusField:           "Status",
+		ActiveStates:          []string{"Todo"},
+		MonitorStates:         []string{"Human Review"},
+		TerminalStates:        []string{"Done"},
+		ReadIssueDependencies: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues, err := client.FetchIssueStatesByIDs(context.Background(), []string{"I_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected one issue, got %d", len(issues))
+	}
+	if issues[0].State != "Todo" {
+		t.Fatalf("unexpected state: %q", issues[0].State)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("expected one project summary query, got %d", len(queries))
+	}
+}
+
 func TestGraphQLWaitsWhenRemainingBudgetIsLow(t *testing.T) {
 	requests := 0
 	reset := time.Unix(1778526073, 0)
@@ -1285,6 +1337,56 @@ func TestFetchIssuesByStatesAddsOpenBlockers(t *testing.T) {
 	blocker := issues[0].BlockedBy[0]
 	if blocker.ID != "I_BLOCKER_OPEN" || blocker.Identifier != "miyataka/api#9" || blocker.State != "open" {
 		t.Fatalf("unexpected blocker: %#v", blocker)
+	}
+}
+
+func TestFetchIssuesByStatesCachesOpenBlockers(t *testing.T) {
+	dependencyRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			dependencyRequests++
+			_, _ = w.Write([]byte(`[
+				{
+					"node_id": "I_BLOCKER_OPEN",
+					"number": 9,
+					"state": "open",
+					"title": "Open blocker",
+					"html_url": "https://github.com/miyataka/api/issues/9"
+				}
+			]`))
+			return
+		}
+		writeProjectIssueFixture(w, "miyataka/api", 10)
+	}))
+	defer server.Close()
+
+	client, err := New(workflow.TrackerConfig{
+		Token:                 "token",
+		Endpoint:              server.URL,
+		RestEndpoint:          server.URL,
+		Owner:                 "miyataka",
+		OwnerType:             "user",
+		ProjectNumber:         1,
+		StatusField:           "Status",
+		ActiveStates:          []string{"Todo"},
+		TerminalStates:        []string{"Done"},
+		ReadIssueDependencies: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		issues, err := client.FetchCandidateIssues(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(issues) != 1 || len(issues[0].BlockedBy) != 1 {
+			t.Fatalf("expected cached blocker on fetch %d, got %#v", i+1, issues)
+		}
+	}
+	if dependencyRequests != 1 {
+		t.Fatalf("expected one dependency request, got %d", dependencyRequests)
 	}
 }
 
