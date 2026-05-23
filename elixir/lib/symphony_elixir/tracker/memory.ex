@@ -41,6 +41,12 @@ defmodule SymphonyElixir.Tracker.Memory do
     :ok
   end
 
+  @spec upsert_workpad_section(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def upsert_workpad_section(issue_id, section_key, markdown) do
+    send_event({:memory_workpad_upsert, issue_id, section_key, markdown})
+    :ok
+  end
+
   @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   def update_issue_state(issue_id, state_name) do
     send_event({:memory_tracker_state_update, issue_id, state_name})

@@ -53,6 +53,11 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
              codex_total_tokens: 120_450,
              runtime_seconds: 785,
              turn_count: 11,
+             health: %{
+               status: :active,
+               reason: :recent_progress,
+               idle_ms: 12_000
+             },
              last_codex_event: "turn_completed",
              last_codex_message: turn_completed_message("completed")
            }),
@@ -63,6 +68,11 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
              codex_total_tokens: 89_200,
              runtime_seconds: 412,
              turn_count: 4,
+             health: %{
+               status: :suspect,
+               reason: :no_meaningful_progress,
+               idle_ms: 125_000
+             },
              last_codex_event: "codex/event/task_started",
              last_codex_message: exec_command_message("mix test --cover")
            })
@@ -96,6 +106,11 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
              codex_total_tokens: 14_200,
              runtime_seconds: 1_225,
              turn_count: 7,
+             health: %{
+               status: :stalled,
+               reason: :self_report_overdue,
+               idle_ms: 601_000
+             },
              last_codex_event: :notification,
              last_codex_message: agent_message_delta("waiting on rate-limit backoff window")
            })

@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, Config, RunHealth, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Linear.Issue
 
   @continuation_retry_delay_ms 1_000
@@ -448,19 +448,146 @@ defmodule SymphonyElixir.Orchestrator do
   defp reconcile_stalled_running_issues(%State{} = state) do
     timeout_ms = Config.settings!().codex.stall_timeout_ms
 
-    cond do
-      timeout_ms <= 0 ->
-        state
+    if map_size(state.running) == 0 do
+      state
+    else
+      now = DateTime.utc_now()
 
-      map_size(state.running) == 0 ->
-        state
+      Enum.reduce(state.running, state, fn {issue_id, running_entry}, state_acc ->
+        running_entry = evaluate_run_health(running_entry, now)
 
-      true ->
-        now = DateTime.utc_now()
+        state_acc
+        |> put_running_entry(issue_id, running_entry)
+        |> handle_run_health_action(issue_id, running_entry, now)
+        |> maybe_restart_hard_stalled_issue(issue_id, now, timeout_ms)
+      end)
+    end
+  end
 
-        Enum.reduce(state.running, state, fn {issue_id, running_entry}, state_acc ->
-          restart_stalled_issue(state_acc, issue_id, running_entry, now, timeout_ms)
-        end)
+  defp put_running_entry(%State{} = state, issue_id, running_entry) do
+    %{state | running: Map.put(state.running, issue_id, running_entry)}
+  end
+
+  defp handle_run_health_action(%State{} = state, issue_id, %{health_status: :stalled} = running_entry, _now) do
+    config = Config.settings!().observability.run_health
+
+    if config.early_retry_on_self_report_failure do
+      restart_self_report_stalled_issue(state, issue_id, running_entry)
+    else
+      state
+    end
+  end
+
+  defp handle_run_health_action(%State{} = state, issue_id, %{health_status: :suspect} = running_entry, now) do
+    maybe_request_self_report(state, issue_id, running_entry, now)
+  end
+
+  defp handle_run_health_action(%State{} = state, _issue_id, _running_entry, _now), do: state
+
+  defp maybe_request_self_report(%State{} = state, issue_id, running_entry, now) do
+    if Map.get(running_entry, :self_report_state) == :requested do
+      state
+    else
+      config = Config.settings!().observability.run_health
+      deadline = DateTime.add(now, config.self_report_timeout_ms, :millisecond)
+      payload = self_report_payload(issue_id, running_entry, deadline)
+
+      deliver_self_report_request(Map.get(running_entry, :pid), payload)
+      write_run_health_warning(issue_id, running_entry, "Requested agent self-report", deadline)
+
+      updated =
+        running_entry
+        |> Map.put(:self_report_state, :requested)
+        |> Map.put(:self_report_requested_at, now)
+        |> Map.put(:self_report_deadline_at, deadline)
+        |> Map.update(:self_report_attempts, 1, &(&1 + 1))
+        |> Map.put(:health_next_action, :requesting_self_report)
+
+      put_running_entry(state, issue_id, updated)
+    end
+  end
+
+  defp self_report_payload(issue_id, running_entry, deadline) do
+    %{
+      issue_id: issue_id,
+      issue_identifier: Map.get(running_entry, :identifier),
+      reason: Map.get(running_entry, :health_reason),
+      last_meaningful_progress_at: Map.get(running_entry, :last_meaningful_progress_at),
+      deadline_at: deadline
+    }
+  end
+
+  defp deliver_self_report_request(pid, payload) when is_pid(pid) do
+    send(pid, {:symphony_control, :request_self_report, payload})
+    :ok
+  end
+
+  defp deliver_self_report_request(_pid, _payload), do: :ok
+
+  defp restart_self_report_stalled_issue(%State{} = state, issue_id, running_entry) do
+    identifier = Map.get(running_entry, :identifier, issue_id)
+    reason = Map.get(running_entry, :health_reason, :self_report_missing)
+
+    write_run_health_warning(
+      issue_id,
+      running_entry,
+      "Self-report missing; retrying early",
+      Map.get(running_entry, :self_report_deadline_at)
+    )
+
+    state
+    |> terminate_running_issue(issue_id, false)
+    |> schedule_issue_retry(issue_id, next_retry_attempt_from_running(running_entry), %{
+      identifier: identifier,
+      error: "self-report missing after suspect run health: #{reason}",
+      worker_host: Map.get(running_entry, :worker_host),
+      workspace_path: Map.get(running_entry, :workspace_path)
+    })
+  end
+
+  defp write_run_health_warning(issue_id, running_entry, action, deadline) do
+    markdown = """
+    ### Run Health Warning
+
+    - Status: #{human_health(Map.get(running_entry, :health_status))}
+    - Reason: #{Map.get(running_entry, :health_reason)}
+    - Last meaningful progress: #{iso8601(Map.get(running_entry, :last_meaningful_progress_at))}
+    - Action: #{action}
+    - Retry policy: #{run_health_retry_policy_text(deadline)}
+    """
+
+    case Tracker.upsert_workpad_section(issue_id, "run-health-warning", markdown) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to update run health Workpad warning for issue_id=#{issue_id}: #{inspect(reason)}")
+    end
+  end
+
+  defp human_health(value), do: value |> to_string() |> String.capitalize()
+
+  defp iso8601(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
+  defp iso8601(_value), do: "n/a"
+
+  defp run_health_retry_policy_text(deadline) do
+    config = Config.settings!().observability.run_health
+
+    if config.early_retry_on_self_report_failure do
+      "Will retry early if no useful report arrives by #{iso8601(deadline)}"
+    else
+      "Early retry is disabled; Symphony will keep watching after #{iso8601(deadline)}"
+    end
+  end
+
+  defp maybe_restart_hard_stalled_issue(%State{} = state, _issue_id, _now, timeout_ms)
+       when not is_integer(timeout_ms) or timeout_ms <= 0,
+       do: state
+
+  defp maybe_restart_hard_stalled_issue(%State{} = state, issue_id, now, timeout_ms) do
+    case Map.get(state.running, issue_id) do
+      nil -> state
+      running_entry -> restart_stalled_issue(state, issue_id, running_entry, now, timeout_ms)
     end
   end
 
@@ -696,6 +823,7 @@ defmodule SymphonyElixir.Orchestrator do
          end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
+        now = DateTime.utc_now()
 
         Logger.info("Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"}")
 
@@ -719,8 +847,21 @@ defmodule SymphonyElixir.Orchestrator do
             codex_last_reported_output_tokens: 0,
             codex_last_reported_total_tokens: 0,
             turn_count: 0,
+            last_meaningful_progress_at: now,
+            last_progress_signature: nil,
+            repeated_event_count: 0,
+            health_status: :active,
+            health_reason: :recent_progress,
+            health_next_action: :watching,
+            health_last_progress_total_tokens: 0,
+            health_last_progress_turn_count: 0,
+            self_report_requested_at: nil,
+            self_report_deadline_at: nil,
+            self_report_attempts: 0,
+            self_report_state: nil,
+            health_workpad_warning_written?: false,
             retry_attempt: normalize_retry_attempt(attempt),
-            started_at: DateTime.utc_now()
+            started_at: now
           })
 
         %{
@@ -1106,6 +1247,8 @@ defmodule SymphonyElixir.Orchestrator do
     running =
       state.running
       |> Enum.map(fn {issue_id, metadata} ->
+        health = RunHealth.evaluate(metadata, now, Config.settings!().observability.run_health)
+
         %{
           issue_id: issue_id,
           identifier: metadata.identifier,
@@ -1122,6 +1265,9 @@ defmodule SymphonyElixir.Orchestrator do
           last_codex_timestamp: metadata.last_codex_timestamp,
           last_codex_message: metadata.last_codex_message,
           last_codex_event: metadata.last_codex_event,
+          health: health,
+          last_meaningful_progress_at: Map.get(metadata, :last_meaningful_progress_at),
+          repeated_event_count: Map.get(metadata, :repeated_event_count, 0),
           runtime_seconds: running_seconds(metadata.started_at, now)
         }
       end)
@@ -1180,8 +1326,9 @@ defmodule SymphonyElixir.Orchestrator do
     last_reported_total = Map.get(running_entry, :codex_last_reported_total_tokens, 0)
     turn_count = Map.get(running_entry, :turn_count, 0)
 
-    {
-      Map.merge(running_entry, %{
+    updated_running_entry =
+      running_entry
+      |> Map.merge(%{
         last_codex_timestamp: timestamp,
         last_codex_message: summarize_codex_update(update),
         session_id: session_id_for_update(running_entry.session_id, update),
@@ -1194,9 +1341,67 @@ defmodule SymphonyElixir.Orchestrator do
         codex_last_reported_output_tokens: max(last_reported_output, token_delta.output_reported),
         codex_last_reported_total_tokens: max(last_reported_total, token_delta.total_reported),
         turn_count: turn_count_for_update(turn_count, running_entry.session_id, update)
-      }),
-      token_delta
-    }
+      })
+      |> update_run_health_progress(update)
+      |> evaluate_run_health(DateTime.utc_now())
+
+    {updated_running_entry, token_delta}
+  end
+
+  defp update_run_health_progress(running_entry, %{timestamp: %DateTime{} = timestamp}) do
+    config = Config.settings!().observability.run_health
+    signature = RunHealth.event_signature(running_entry)
+
+    if RunHealth.meaningful_progress?(running_entry, config) do
+      running_entry
+      |> Map.merge(%{
+        last_meaningful_progress_at: timestamp,
+        last_progress_signature: signature,
+        repeated_event_count: 0,
+        health_last_progress_total_tokens: Map.get(running_entry, :codex_total_tokens, 0),
+        health_last_progress_turn_count: Map.get(running_entry, :turn_count, 0)
+      })
+      |> maybe_clear_satisfied_self_report(timestamp)
+    else
+      repeated_event_count =
+        if Map.get(running_entry, :last_progress_signature) == signature do
+          Map.get(running_entry, :repeated_event_count, 0) + 1
+        else
+          1
+        end
+
+      Map.merge(running_entry, %{
+        last_progress_signature: signature,
+        repeated_event_count: repeated_event_count
+      })
+    end
+  end
+
+  defp maybe_clear_satisfied_self_report(
+         %{self_report_state: :requested, self_report_requested_at: %DateTime{} = requested_at} =
+           running_entry,
+         %DateTime{} = progress_at
+       ) do
+    if DateTime.compare(progress_at, requested_at) == :gt do
+      Map.merge(running_entry, %{
+        self_report_state: nil,
+        self_report_deadline_at: nil
+      })
+    else
+      running_entry
+    end
+  end
+
+  defp maybe_clear_satisfied_self_report(running_entry, _progress_at), do: running_entry
+
+  defp evaluate_run_health(running_entry, %DateTime{} = now) do
+    health = RunHealth.evaluate(running_entry, now, Config.settings!().observability.run_health)
+
+    Map.merge(running_entry, %{
+      health_status: health.status,
+      health_reason: health.reason,
+      health_next_action: health.next_action
+    })
   end
 
   defp codex_app_server_pid_for_update(_existing, %{codex_app_server_pid: pid})

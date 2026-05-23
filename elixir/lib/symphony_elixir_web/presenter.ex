@@ -65,6 +65,7 @@ defmodule SymphonyElixirWeb.Presenter do
       issue_identifier: issue_identifier,
       issue_id: issue_id_from_entries(running, retry),
       status: issue_status(running, retry),
+      health: health_payload(running && Map.get(running, :health)),
       workspace: %{
         path: workspace_path(issue_identifier, running, retry),
         host: workspace_host(running, retry)
@@ -104,6 +105,7 @@ defmodule SymphonyElixirWeb.Presenter do
       workspace_path: Map.get(entry, :workspace_path),
       session_id: entry.session_id,
       turn_count: Map.get(entry, :turn_count, 0),
+      health: health_payload(Map.get(entry, :health)),
       last_event: entry.last_codex_event,
       last_message: summarize_message(entry.last_codex_message),
       started_at: iso8601(entry.started_at),
@@ -134,6 +136,7 @@ defmodule SymphonyElixirWeb.Presenter do
       workspace_path: Map.get(running, :workspace_path),
       session_id: running.session_id,
       turn_count: Map.get(running, :turn_count, 0),
+      health: health_payload(Map.get(running, :health)),
       state: running.state,
       started_at: iso8601(running.started_at),
       last_event: running.last_codex_event,
@@ -180,6 +183,32 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp summarize_message(nil), do: nil
   defp summarize_message(message), do: StatusDashboard.humanize_codex_message(message)
+
+  defp health_payload(nil), do: nil
+
+  defp health_payload(%{} = health) do
+    %{
+      status: health_value(health, :status) && to_string(health_value(health, :status)),
+      reason: health_value(health, :reason) && to_string(health_value(health, :reason)),
+      next_action: health_value(health, :next_action) && to_string(health_value(health, :next_action)),
+      last_meaningful_progress_at: iso8601(health_value(health, :last_meaningful_progress_at)),
+      idle_ms: health_value(health, :idle_ms),
+      details: health_details_payload(health_value(health, :details) || %{})
+    }
+  end
+
+  defp health_payload(_health), do: nil
+  defp health_value(health, key), do: Map.get(health, key) || Map.get(health, to_string(key))
+
+  defp health_details_payload(details) when is_map(details) do
+    Enum.reduce(details, %{}, fn {key, value}, acc ->
+      Map.put(acc, to_string(key), health_detail_value(value))
+    end)
+  end
+
+  defp health_details_payload(_details), do: %{}
+  defp health_detail_value(%DateTime{} = value), do: iso8601(value)
+  defp health_detail_value(value), do: value
 
   defp due_at_iso8601(due_in_ms) when is_integer(due_in_ms) do
     DateTime.utc_now()

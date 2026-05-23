@@ -887,6 +887,59 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Config.settings!().codex.command == "codex app-server"
   end
 
+  test "run health observability config uses conservative defaults" do
+    write_workflow_file!(Workflow.workflow_file_path(), observability_run_health_omit: true)
+
+    settings = Config.settings!()
+
+    assert settings.observability.run_health.enabled == true
+    assert settings.observability.run_health.quiet_after_ms == 300_000
+    assert settings.observability.run_health.suspect_after_ms == 600_000
+    assert settings.observability.run_health.self_report_timeout_ms == 120_000
+    assert settings.observability.run_health.early_retry_on_self_report_failure == true
+    assert settings.observability.run_health.min_token_progress_delta == 500
+    assert settings.observability.run_health.repeated_event_suspect_count == 10
+  end
+
+  test "run health observability config parses explicit values" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      observability_run_health_enabled: false,
+      observability_run_health_quiet_after_ms: 10_000,
+      observability_run_health_suspect_after_ms: 20_000,
+      observability_run_health_self_report_timeout_ms: 30_000,
+      observability_run_health_early_retry_on_self_report_failure: false,
+      observability_run_health_min_token_progress_delta: 42,
+      observability_run_health_repeated_event_suspect_count: 3
+    )
+
+    settings = Config.settings!()
+
+    assert settings.observability.run_health.enabled == false
+    assert settings.observability.run_health.quiet_after_ms == 10_000
+    assert settings.observability.run_health.suspect_after_ms == 20_000
+    assert settings.observability.run_health.self_report_timeout_ms == 30_000
+    assert settings.observability.run_health.early_retry_on_self_report_failure == false
+    assert settings.observability.run_health.min_token_progress_delta == 42
+    assert settings.observability.run_health.repeated_event_suspect_count == 3
+  end
+
+  test "run health observability config validates positive thresholds" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      observability_run_health_quiet_after_ms: 0,
+      observability_run_health_suspect_after_ms: -1,
+      observability_run_health_self_report_timeout_ms: 0,
+      observability_run_health_min_token_progress_delta: -1,
+      observability_run_health_repeated_event_suspect_count: 0
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.settings()
+    assert message =~ "observability.run_health.quiet_after_ms"
+    assert message =~ "observability.run_health.suspect_after_ms"
+    assert message =~ "observability.run_health.self_report_timeout_ms"
+    assert message =~ "observability.run_health.min_token_progress_delta"
+    assert message =~ "observability.run_health.repeated_event_suspect_count"
+  end
+
   test "config resolves $VAR references for env-backed secret and path values" do
     workspace_env_var = "SYMP_WORKSPACE_ROOT_#{System.unique_integer([:positive])}"
     api_key_env_var = "SYMP_LINEAR_API_KEY_#{System.unique_integer([:positive])}"

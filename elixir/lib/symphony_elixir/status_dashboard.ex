@@ -19,11 +19,12 @@ defmodule SymphonyElixir.StatusDashboard do
   @running_stage_width 14
   @running_pid_width 8
   @running_age_width 12
+  @running_health_width 12
   @running_tokens_width 10
   @running_session_width 14
   @running_event_default_width 44
   @running_event_min_width 12
-  @running_row_chrome_width 10
+  @running_row_chrome_width 11
   @default_terminal_columns 115
 
   @ansi_reset IO.ANSI.reset()
@@ -597,6 +598,7 @@ defmodule SymphonyElixir.StatusDashboard do
     runtime_seconds = running_entry.runtime_seconds || 0
     turn_count = Map.get(running_entry, :turn_count, 0)
     age = format_cell(format_runtime_and_turns(runtime_seconds, turn_count), @running_age_width)
+    health = format_health_summary(running_entry) |> format_cell(@running_health_width)
     event = running_entry.last_codex_event || "none"
     event_label = format_cell(summarize_message(running_entry.last_codex_message), running_event_width)
 
@@ -623,6 +625,8 @@ defmodule SymphonyElixir.StatusDashboard do
       " ",
       colorize(age, @ansi_magenta),
       " ",
+      colorize(health, health_color(Map.get(running_entry, :health))),
+      " ",
       colorize(tokens, @ansi_yellow),
       " ",
       colorize(session, @ansi_cyan),
@@ -636,6 +640,49 @@ defmodule SymphonyElixir.StatusDashboard do
   @spec format_running_summary_for_test(map(), integer() | nil) :: String.t()
   def format_running_summary_for_test(running_entry, terminal_columns \\ nil),
     do: format_running_summary(running_entry, running_event_width(terminal_columns))
+
+  defp format_health_summary(%{health: %{status: status, idle_ms: idle_ms}}) do
+    "#{compact_health_status(status)} #{format_health_idle(idle_ms)}"
+    |> String.trim()
+  end
+
+  defp format_health_summary(_entry), do: "Health n/a"
+
+  defp compact_health_status(status) do
+    case status |> to_string() |> String.downcase() do
+      "active" -> "Act"
+      "quiet" -> "Q"
+      "suspect" -> "Sus"
+      "stalled" -> "Stl"
+      other -> other |> String.slice(0, 3) |> String.capitalize()
+    end
+  end
+
+  defp format_health_idle(idle_ms) when is_integer(idle_ms) and idle_ms < 60_000 do
+    "#{div(max(idle_ms, 0), 1_000)}s"
+  end
+
+  defp format_health_idle(idle_ms) when is_integer(idle_ms) and idle_ms < 3_600_000 do
+    "#{div(idle_ms, 60_000)}m"
+  end
+
+  defp format_health_idle(idle_ms) when is_integer(idle_ms) do
+    "#{div(idle_ms, 3_600_000)}h"
+  end
+
+  defp format_health_idle(_idle_ms), do: ""
+
+  defp health_color(%{status: status}) do
+    case status |> to_string() |> String.downcase() do
+      "active" -> @ansi_green
+      "quiet" -> @ansi_gray
+      "suspect" -> @ansi_yellow
+      "stalled" -> @ansi_red
+      _ -> @ansi_gray
+    end
+  end
+
+  defp health_color(_health), do: @ansi_gray
 
   @doc false
   @spec format_tps_for_test(number()) :: String.t()
@@ -743,6 +790,7 @@ defmodule SymphonyElixir.StatusDashboard do
         format_cell("STAGE", @running_stage_width),
         format_cell("PID", @running_pid_width),
         format_cell("AGE / TURN", @running_age_width),
+        format_cell("HEALTH", @running_health_width),
         format_cell("TOKENS", @running_tokens_width),
         format_cell("SESSION", @running_session_width),
         format_cell("EVENT", running_event_width)
@@ -758,9 +806,10 @@ defmodule SymphonyElixir.StatusDashboard do
         @running_stage_width +
         @running_pid_width +
         @running_age_width +
+        @running_health_width +
         @running_tokens_width +
         @running_session_width +
-        running_event_width + 6
+        running_event_width + 7
 
     "│   " <> colorize(String.duplicate("─", separator_width), @ansi_gray)
   end
@@ -779,6 +828,7 @@ defmodule SymphonyElixir.StatusDashboard do
       @running_stage_width +
       @running_pid_width +
       @running_age_width +
+      @running_health_width +
       @running_tokens_width +
       @running_session_width
   end

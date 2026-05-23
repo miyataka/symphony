@@ -1304,6 +1304,17 @@ defmodule SymphonyElixir.CoreTest do
 
         state =
           if attempt == 1 do
+            send(
+              self(),
+              {:symphony_control, :request_self_report,
+               %{
+                 issue_id: "issue-continue",
+                 issue_identifier: "MT-247",
+                 reason: :no_meaningful_progress,
+                 deadline_at: DateTime.add(DateTime.utc_now(), 1, :second)
+               }}
+            )
+
             "In Progress"
           else
             "Done"
@@ -1356,6 +1367,8 @@ defmodule SymphonyElixir.CoreTest do
       refute Enum.at(turn_texts, 1) =~ "You are an agent for this repository."
       assert Enum.at(turn_texts, 1) =~ "Continuation guidance:"
       assert Enum.at(turn_texts, 1) =~ "continuation turn #2 of 3"
+      assert Enum.at(turn_texts, 1) =~ "Run health self-report request:"
+      assert Enum.at(turn_texts, 1) =~ "no_meaningful_progress"
     after
       System.delete_env("SYMP_TEST_CODEx_TRACE")
       File.rm_rf(test_root)
