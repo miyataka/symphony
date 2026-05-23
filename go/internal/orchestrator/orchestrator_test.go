@@ -2,15 +2,18 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/miyataka/symphony/go/internal/tracker"
 	"github.com/miyataka/symphony/go/internal/workflow"
+	"github.com/miyataka/symphony/go/internal/workspace"
 )
 
 func TestRenderPrompt(t *testing.T) {
@@ -658,6 +661,126 @@ func TestRunIssueDoesNotReuseFallbackAfterIssueStateChanges(t *testing.T) {
 	}
 }
 
+func TestPollSkipsIssueWithFreshRunLeaseFromPreviousProcess(t *testing.T) {
+	cfg := testConfig()
+	cfg.Workspace.Root = t.TempDir()
+	cfg.Agent.Command = `printf 'started\n'; sleep 1`
+	issue := tracker.Issue{
+		ID:                      "I_1",
+		Identifier:              "repo#1",
+		Title:                   "Issue",
+		State:                   "In Progress",
+		RepositoryNameWithOwner: "repo",
+	}
+	writeTestRunLease(t, cfg.Workspace.Root, issue, time.Now().UTC(), "running")
+	recorder := &recordingTracker{candidateIssues: []tracker.Issue{issue}}
+	service := New(Options{
+		Config:         cfg,
+		PromptTemplate: "Issue {{ .Issue.Identifier }}",
+		Tracker:        recorder,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := service.poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	service.mu.Lock()
+	_, running := service.running[issue.ID]
+	service.mu.Unlock()
+	if running {
+		t.Fatal("expected fresh previous-process lease to prevent dispatch")
+	}
+}
+
+func TestRunRecordsInterruptedWorkpadOnShutdown(t *testing.T) {
+	startedPath := filepath.Join(t.TempDir(), "started")
+	cfg := testConfig()
+	cfg.Workspace.Root = t.TempDir()
+	cfg.Polling.IntervalMS = int(time.Hour / time.Millisecond)
+	cfg.Agent.Command = fmt.Sprintf(`printf 'started\n'; touch %q; sleep 10`, startedPath)
+	issue := tracker.Issue{
+		ID:                      "I_1",
+		Identifier:              "repo#1",
+		Title:                   "Issue",
+		State:                   "In Progress",
+		RepositoryNameWithOwner: "repo",
+	}
+	recorder := &recordingTracker{
+		candidateIssues: []tracker.Issue{issue},
+	}
+	service := New(Options{
+		Config:         cfg,
+		PromptTemplate: "Issue {{ .Issue.Identifier }}",
+		Tracker:        recorder,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- service.Run(ctx)
+	}()
+	waitForFile(t, startedPath)
+
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("service did not return after cancellation")
+	}
+
+	if !strings.Contains(recorder.workpad, "interrupted") {
+		t.Fatalf("expected shutdown to record interrupted cleanup in workpad, got: %q", recorder.workpad)
+	}
+}
+
+func TestRunAgentTurnCancellationKillsProcessTree(t *testing.T) {
+	if !supportsProcessGroupTests() {
+		t.Skip("process group cancellation test requires Unix process signals")
+	}
+	tempDir := t.TempDir()
+	pidPath := filepath.Join(tempDir, "child.pid")
+	cfg := testConfig()
+	cfg.Agent.Command = fmt.Sprintf(`sleep 60 & echo $! > %q; printf 'started\n'; wait`, pidPath)
+	service := New(Options{
+		Config:         cfg,
+		PromptTemplate: "Issue {{ .Issue.Identifier }} turn {{ .Turn }}",
+		Tracker:        &recordingTracker{},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- service.runAgentTurn(ctx, tempDir, tracker.Issue{
+			ID:         "I_1",
+			Identifier: "repo#1",
+			Title:      "Issue",
+			State:      "In Progress",
+		}, 1)
+	}()
+	waitForFile(t, pidPath)
+	childPID := readPID(t, pidPath)
+	t.Cleanup(func() {
+		cleanupProcess(childPID)
+	})
+
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent command did not return after cancellation")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processExists(childPID) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("expected child process %d to be killed with the agent command process tree", childPID)
+}
+
 func TestApplyReviewStatePolicyMovesHumanReviewToRework(t *testing.T) {
 	recorder := &recordingTracker{}
 	service := New(Options{
@@ -1151,6 +1274,7 @@ type recordingTracker struct {
 	workpad            string
 	mergedPRID         string
 	mergeMethod        string
+	candidateIssues    []tracker.Issue
 	issueStatesByID    []tracker.Issue
 	fetchIssueStateIDs [][]string
 	createdIssues      []tracker.IssueCreation
@@ -1158,7 +1282,7 @@ type recordingTracker struct {
 }
 
 func (r *recordingTracker) FetchCandidateIssues(context.Context) ([]tracker.Issue, error) {
-	return nil, nil
+	return append([]tracker.Issue(nil), r.candidateIssues...), nil
 }
 
 func (r *recordingTracker) FetchIssuesByStates(context.Context, []string) ([]tracker.Issue, error) {
@@ -1192,4 +1316,53 @@ func (r *recordingTracker) CreateIssue(_ context.Context, creation tracker.Issue
 		return r.createdIssue, nil
 	}
 	return tracker.Issue{ID: "I_CREATED", Identifier: creation.RepositoryNameWithOwner + "#2"}, nil
+}
+
+func writeTestRunLease(t *testing.T, root string, issue tracker.Issue, heartbeat time.Time, status string) {
+	t.Helper()
+	stateDir := filepath.Join(root, workspace.NameForIssue(issue.Identifier), ".symphony")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{
+		"issue_id":         issue.ID,
+		"issue_identifier": issue.Identifier,
+		"issue_state":      issue.State,
+		"run_id":           "previous-process",
+		"status":           status,
+		"started_at":       heartbeat.Add(-time.Minute),
+		"heartbeat_at":     heartbeat,
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "run_lease.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", path)
+}
+
+func readPID(t *testing.T, path string) int {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(body)))
+	if err != nil {
+		t.Fatalf("invalid pid file %q: %v", string(body), err)
+	}
+	return pid
 }
