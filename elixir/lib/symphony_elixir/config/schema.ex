@@ -350,7 +350,7 @@ defmodule SymphonyElixir.Config.Schema do
   def resolve_runtime_turn_sandbox_policy(settings, workspace \\ nil, opts \\ []) do
     case settings.codex.turn_sandbox_policy do
       %{} = policy ->
-        {:ok, policy}
+        resolve_runtime_policy_tokens(policy, settings, workspace, opts)
 
       _ ->
         workspace
@@ -544,6 +544,45 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   defp default_runtime_turn_sandbox_policy(workspace_root, _opts) do
+    {:error, {:unsafe_turn_sandbox_policy, {:invalid_workspace_root, workspace_root}}}
+  end
+
+  defp resolve_runtime_policy_tokens(
+         %{"type" => "workspaceWrite", "writableRoots" => writable_roots} = policy,
+         settings,
+         workspace,
+         opts
+       )
+       when is_list(writable_roots) do
+    with {:ok, runtime_workspace} <-
+           workspace
+           |> default_workspace_root(settings.workspace.root)
+           |> runtime_workspace_root(opts) do
+      {:ok,
+       %{
+         policy
+         | "writableRoots" =>
+             Enum.map(writable_roots, fn
+               "$PWD" -> runtime_workspace
+               writable_root -> writable_root
+             end)
+       }}
+    end
+  end
+
+  defp resolve_runtime_policy_tokens(policy, _settings, _workspace, _opts), do: {:ok, policy}
+
+  defp runtime_workspace_root(workspace_root, opts) when is_binary(workspace_root) do
+    if Keyword.get(opts, :remote, false) do
+      {:ok, workspace_root}
+    else
+      workspace_root
+      |> expand_local_workspace_root()
+      |> PathSafety.canonicalize()
+    end
+  end
+
+  defp runtime_workspace_root(workspace_root, _opts) do
     {:error, {:unsafe_turn_sandbox_policy, {:invalid_workspace_root, workspace_root}}}
   end
 

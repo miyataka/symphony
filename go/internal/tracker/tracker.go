@@ -29,24 +29,35 @@ type Issue struct {
 }
 
 type IssueComment struct {
-	ID        string
-	Author    string
-	Body      string
-	URL       string
-	CreatedAt *time.Time
+	ID                string
+	Author            string
+	AuthorAssociation string
+	Body              string
+	URL               string
+	CreatedAt         *time.Time
 }
 
 type PRReviewComment struct {
-	ID          string
-	PRNumber    int
-	PRURL       string
-	Path        string
-	Line        int
-	Author      string
-	AuthorIsBot bool
-	Body        string
-	URL         string
-	CreatedAt   *time.Time
+	ID                string
+	PRNumber          int
+	PRURL             string
+	Path              string
+	Line              int
+	Author            string
+	AuthorAssociation string
+	AuthorIsBot       bool
+	Body              string
+	URL               string
+	CreatedAt         *time.Time
+}
+
+func TrustedCommentAuthorAssociation(authorAssociation string) bool {
+	switch strings.ToUpper(strings.TrimSpace(authorAssociation)) {
+	case "OWNER", "MEMBER":
+		return true
+	default:
+		return false
+	}
 }
 
 type Blocker struct {

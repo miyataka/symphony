@@ -108,8 +108,8 @@ agent:
 Use YAML front matter plus a Go `text/template` prompt body. The prompt receives:
 
 - `.Issue`: normalized issue metadata
-- `.Issue.Comments`: non-Workpad issue comments for additional human instructions and context
-- `.Issue.PRReviewComments`: unresolved review thread comments from linked pull requests (bot comments older than the latest commit are skipped)
+- `.Issue.Comments`: non-Workpad issue comments from repository owners or organization members for additional human instructions and context
+- `.Issue.PRReviewComments`: unresolved review thread comments from repository owners or organization members on linked pull requests (bot comments older than the latest commit are skipped)
 - `.Turn`: current turn number
 
 Minimal GitHub Projects example:
@@ -197,14 +197,14 @@ Repository: {{ .Issue.RepositoryNameWithOwner }}
 
 {{ .Issue.Description }}
 
-{{ if .Issue.Comments }}Issue comments:
+{{ if .Issue.Comments }}Issue comments from repository owners or organization members:
 {{ range .Issue.Comments }}
 - {{ .Author }} {{ .URL }}
 {{ .Body }}
 {{ end }}
 {{ end }}
 
-{{ if .Issue.PRReviewComments }}Unresolved PR review comments:
+{{ if .Issue.PRReviewComments }}Unresolved PR review comments from repository owners or organization members:
 {{ range .Issue.PRReviewComments }}
 - {{ .Author }}{{ if .AuthorIsBot }} (bot){{ end }} on PR #{{ .PRNumber }} {{ .Path }}{{ if .Line }}:{{ .Line }}{{ end }} {{ .URL }}
 {{ .Body }}

@@ -1218,6 +1218,67 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "runtime sandbox policy resolution expands PWD writable roots to the issue workspace" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-runtime-sandbox-pwd-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      issue_workspace = Path.join(workspace_root, "MT-PWD")
+      File.mkdir_p!(issue_workspace)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        codex_turn_sandbox_policy: %{
+          type: "workspaceWrite",
+          writableRoots: ["/Users/taka/wspace/symphony", "$PWD"]
+        }
+      )
+
+      assert {:ok, runtime_settings} = Config.codex_runtime_settings(issue_workspace)
+      assert {:ok, canonical_issue_workspace} = SymphonyElixir.PathSafety.canonicalize(issue_workspace)
+
+      assert runtime_settings.turn_sandbox_policy == %{
+               "type" => "workspaceWrite",
+               "writableRoots" => ["/Users/taka/wspace/symphony", canonical_issue_workspace]
+             }
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "runtime sandbox policy resolution keeps remote PWD writable roots remote" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      codex_turn_sandbox_policy: %{
+        type: "workspaceWrite",
+        writableRoots: ["$PWD"]
+      }
+    )
+
+    assert {:ok, runtime_settings} =
+             Config.codex_runtime_settings("/remote/workspaces/MT-PWD", remote: true)
+
+    assert runtime_settings.turn_sandbox_policy == %{
+             "type" => "workspaceWrite",
+             "writableRoots" => ["/remote/workspaces/MT-PWD"]
+           }
+  end
+
+  test "runtime sandbox policy resolution rejects PWD writable root without a valid workspace" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      codex_turn_sandbox_policy: %{
+        type: "workspaceWrite",
+        writableRoots: ["$PWD"]
+      }
+    )
+
+    assert {:error, {:unsafe_turn_sandbox_policy, {:invalid_workspace_root, 123}}} =
+             Config.codex_runtime_settings(123)
+  end
+
   test "path safety returns errors for invalid path segments" do
     invalid_segment = String.duplicate("a", 300)
     path = Path.join(System.tmp_dir!(), invalid_segment)

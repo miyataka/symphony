@@ -1033,11 +1033,12 @@ type issueContent struct {
 }
 
 type issueCommentContent struct {
-	ID        string `json:"id"`
-	Body      string `json:"body"`
-	URL       string `json:"url"`
-	CreatedAt string `json:"createdAt"`
-	Author    struct {
+	ID                string `json:"id"`
+	Body              string `json:"body"`
+	URL               string `json:"url"`
+	CreatedAt         string `json:"createdAt"`
+	AuthorAssociation string `json:"authorAssociation"`
+	Author            struct {
 		Login string `json:"login"`
 	} `json:"author"`
 }
@@ -1081,11 +1082,12 @@ type pullRequestContent struct {
 }
 
 type reviewThreadCommentContent struct {
-	ID        string `json:"id"`
-	Body      string `json:"body"`
-	URL       string `json:"url"`
-	CreatedAt string `json:"createdAt"`
-	Author    struct {
+	ID                string `json:"id"`
+	Body              string `json:"body"`
+	URL               string `json:"url"`
+	CreatedAt         string `json:"createdAt"`
+	AuthorAssociation string `json:"authorAssociation"`
+	Author            struct {
 		Typename string `json:"__typename"`
 		Login    string `json:"login"`
 	} `json:"author"`
@@ -1199,22 +1201,26 @@ func (i issueContent) PRReviewComments(workpadMarker string) []tracker.PRReviewC
 				if body == "" || containsAnyMarker(body, markers) {
 					continue
 				}
+				if !tracker.TrustedCommentAuthorAssociation(comment.AuthorAssociation) {
+					continue
+				}
 				createdAt := parseTimePtr(comment.CreatedAt)
 				isBot := comment.Author.Typename == "Bot"
 				if isBot && latestCommit != nil && createdAt != nil && !createdAt.After(*latestCommit) {
 					continue
 				}
 				out = append(out, tracker.PRReviewComment{
-					ID:          comment.ID,
-					PRNumber:    pr.Number,
-					PRURL:       pr.URL,
-					Path:        thread.Path,
-					Line:        thread.Line,
-					Author:      comment.Author.Login,
-					AuthorIsBot: isBot,
-					Body:        body,
-					URL:         comment.URL,
-					CreatedAt:   createdAt,
+					ID:                comment.ID,
+					PRNumber:          pr.Number,
+					PRURL:             pr.URL,
+					Path:              thread.Path,
+					Line:              thread.Line,
+					Author:            comment.Author.Login,
+					AuthorAssociation: comment.AuthorAssociation,
+					AuthorIsBot:       isBot,
+					Body:              body,
+					URL:               comment.URL,
+					CreatedAt:         createdAt,
 				})
 			}
 		}
@@ -1230,12 +1236,16 @@ func (i issueContent) IssueComments(workpadMarker string) []tracker.IssueComment
 		if body == "" || containsAnyMarker(body, markers) {
 			continue
 		}
+		if !tracker.TrustedCommentAuthorAssociation(comment.AuthorAssociation) {
+			continue
+		}
 		out = append(out, tracker.IssueComment{
-			ID:        comment.ID,
-			Author:    comment.Author.Login,
-			Body:      body,
-			URL:       comment.URL,
-			CreatedAt: parseTimePtr(comment.CreatedAt),
+			ID:                comment.ID,
+			Author:            comment.Author.Login,
+			AuthorAssociation: comment.AuthorAssociation,
+			Body:              body,
+			URL:               comment.URL,
+			CreatedAt:         parseTimePtr(comment.CreatedAt),
 		})
 	}
 	return out
@@ -1418,6 +1428,7 @@ __typename
         body
         url
         createdAt
+        authorAssociation
         author { login }
       }
     }
@@ -1454,6 +1465,7 @@ __typename
                 body
                 url
                 createdAt
+                authorAssociation
                 author { __typename login }
               }
             }
