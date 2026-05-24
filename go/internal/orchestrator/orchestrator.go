@@ -38,8 +38,9 @@ type Service struct {
 	logger         *slog.Logger
 	workspaces     workspace.Manager
 
-	mu      sync.Mutex
-	running map[string]*runHandle
+	mu       sync.Mutex
+	running  map[string]*runHandle
+	retrying map[string]retryHandle
 }
 
 type runHandle struct {
@@ -51,6 +52,13 @@ type runHandle struct {
 	turnCount    int
 	agentKind    string
 	loopReported bool
+}
+
+type retryHandle struct {
+	issue   tracker.Issue
+	attempt int
+	dueAt   time.Time
+	err     string
 }
 
 func New(opts Options) *Service {
@@ -67,7 +75,8 @@ func New(opts Options) *Service {
 			Root:  opts.Config.Workspace.Root,
 			Hooks: opts.Config.Hooks,
 		},
-		running: map[string]*runHandle{},
+		running:  map[string]*runHandle{},
+		retrying: map[string]retryHandle{},
 	}
 }
 
@@ -78,19 +87,47 @@ func (s *Service) Snapshot() statusdashboard.Snapshot {
 	running := make([]statusdashboard.RunningEntry, 0, len(s.running))
 	for _, handle := range s.running {
 		running = append(running, statusdashboard.RunningEntry{
+			Identifier:   handle.issue.Identifier,
+			State:        handle.issue.State,
+			AgentKind:    handle.agentKind,
+			RetryCount:   handle.retryCount,
+			TurnCount:    handle.turnCount,
+			StartedAt:    handle.startedAt,
+			HealthStatus: "active",
+			HealthIdle:   0,
+		})
+	}
+	now := time.Now()
+	retrying := make([]statusdashboard.RetryEntry, 0, len(s.retrying))
+	for _, handle := range s.retrying {
+		retrying = append(retrying, statusdashboard.RetryEntry{
 			Identifier: handle.issue.Identifier,
-			State:      handle.issue.State,
-			AgentKind:  handle.agentKind,
-			RetryCount: handle.retryCount,
-			TurnCount:  handle.turnCount,
-			StartedAt:  handle.startedAt,
+			Attempt:    handle.attempt,
+			DueIn:      handle.dueAt.Sub(now),
+			Error:      handle.err,
 		})
 	}
 
 	return statusdashboard.Snapshot{
-		Running:   running,
-		MaxAgents: s.cfg.Agent.MaxConcurrentAgents,
-		Now:       time.Now(),
+		Running:     running,
+		Retrying:    retrying,
+		MaxAgents:   s.cfg.Agent.MaxConcurrentAgents,
+		Now:         now,
+		ProjectURL:  githubProjectURL(s.cfg.Tracker),
+		NextRefresh: s.cfg.PollInterval(),
+	}
+}
+
+func githubProjectURL(cfg workflow.TrackerConfig) string {
+	owner := strings.TrimSpace(cfg.Owner)
+	if owner == "" || cfg.ProjectNumber <= 0 {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.OwnerType)) {
+	case "organization":
+		return fmt.Sprintf("https://github.com/orgs/%s/projects/%d", owner, cfg.ProjectNumber)
+	default:
+		return fmt.Sprintf("https://github.com/users/%s/projects/%d", owner, cfg.ProjectNumber)
 	}
 }
 
@@ -287,6 +324,7 @@ func (s *Service) dispatch(parent context.Context, issue tracker.Issue, retryCou
 		}
 		delay := s.retryDelay(retryCount + 1)
 		s.logger.Warn("issue run failed; scheduling retry", "issue_id", issue.ID, "issue_identifier", issue.Identifier, "delay", delay.String(), "error", err)
+		s.recordRetry(issue, retryCount+1, time.Now().Add(delay), err)
 		time.AfterFunc(delay, func() {
 			s.dispatchRetry(parent, issue, retryCount+1)
 		})
@@ -294,6 +332,7 @@ func (s *Service) dispatch(parent context.Context, issue tracker.Issue, retryCou
 }
 
 func (s *Service) dispatchRetry(parent context.Context, issue tracker.Issue, retryCount int) {
+	s.clearRetry(issue.ID)
 	if parent.Err() != nil {
 		return
 	}
@@ -309,6 +348,23 @@ func (s *Service) dispatchRetry(parent context.Context, issue tracker.Issue, ret
 	if s.canDispatch(refreshed) {
 		s.dispatch(parent, refreshed, retryCount)
 	}
+}
+
+func (s *Service) recordRetry(issue tracker.Issue, attempt int, dueAt time.Time, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.retrying[issue.ID] = retryHandle{
+		issue:   issue,
+		attempt: attempt,
+		dueAt:   dueAt,
+		err:     err.Error(),
+	}
+}
+
+func (s *Service) clearRetry(issueID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.retrying, issueID)
 }
 
 func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) (runErr error) {
