@@ -278,6 +278,32 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
            }
   end
 
+  test "linear_graphql formats Linear rate-limit failures" do
+    response =
+      DynamicTool.execute(
+        "linear_graphql",
+        %{"query" => "query Viewer { viewer { id } }"},
+        linear_client: fn _query, _variables, _opts ->
+          {:error,
+           {:linear_rate_limited,
+            %{
+              reset_at_ms: 1_779_527_225_941,
+              retry_after_ms: 60_000
+            }}}
+        end
+      )
+
+    assert response["success"] == false
+
+    assert Jason.decode!(response["output"]) == %{
+             "error" => %{
+               "message" => "Linear GraphQL request is rate limited.",
+               "reset_at_ms" => 1_779_527_225_941,
+               "retry_after_ms" => 60_000
+             }
+           }
+  end
+
   test "linear_graphql formats unexpected failures from the client" do
     response =
       DynamicTool.execute(

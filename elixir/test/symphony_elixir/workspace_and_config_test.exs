@@ -458,6 +458,75 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert log =~ "Variable \\\"$ids\\\" got invalid value"
   end
 
+  test "linear client records RATELIMITED GraphQL responses and blocks later requests until reset" do
+    reset_at_ms = System.system_time(:millisecond) + 60_000
+
+    assert {:error, {:linear_rate_limited, %{reset_at_ms: ^reset_at_ms, retry_after_ms: retry_after_ms}}} =
+             Client.graphql(
+               "query Viewer { viewer { id } }",
+               %{},
+               request_fun: fn _payload, _headers ->
+                 {:ok,
+                  %{
+                    status: 400,
+                    headers: [{"X-RateLimit-Requests-Reset", Integer.to_string(reset_at_ms)}],
+                    body: %{
+                      "errors" => [
+                        %{"message" => "rate limited", "extensions" => %{"code" => "RATELIMITED"}}
+                      ]
+                    }
+                  }}
+               end
+             )
+
+    assert retry_after_ms > 0
+
+    assert {:error, {:linear_rate_limited, %{reset_at_ms: ^reset_at_ms}}} =
+             Client.graphql(
+               "query Viewer { viewer { id } }",
+               %{},
+               request_fun: fn _payload, _headers ->
+                 send(self(), :unexpected_linear_request)
+                 {:ok, %{status: 200, body: %{"data" => %{}}}}
+               end
+             )
+
+    refute_received :unexpected_linear_request
+  end
+
+  test "linear client records exhausted successful responses and blocks the next request" do
+    reset_at_ms = System.system_time(:millisecond) + 60_000
+
+    assert {:ok, %{"data" => %{"viewer" => %{"id" => "usr_123"}}}} =
+             Client.graphql(
+               "query Viewer { viewer { id } }",
+               %{},
+               request_fun: fn _payload, _headers ->
+                 {:ok,
+                  %{
+                    status: 200,
+                    headers: [
+                      {"x-ratelimit-requests-remaining", "0"},
+                      {"x-ratelimit-requests-reset", Integer.to_string(reset_at_ms)}
+                    ],
+                    body: %{"data" => %{"viewer" => %{"id" => "usr_123"}}}
+                  }}
+               end
+             )
+
+    assert {:error, {:linear_rate_limited, %{reset_at_ms: ^reset_at_ms}}} =
+             Client.graphql(
+               "query Viewer { viewer { id } }",
+               %{},
+               request_fun: fn _payload, _headers ->
+                 send(self(), :unexpected_linear_request)
+                 {:ok, %{status: 200, body: %{"data" => %{}}}}
+               end
+             )
+
+    refute_received :unexpected_linear_request
+  end
+
   test "orchestrator sorts dispatch by priority then oldest created_at" do
     issue_same_priority_older = %Issue{
       id: "issue-old-high",

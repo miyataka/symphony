@@ -13,6 +13,7 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.HttpServer
       alias SymphonyElixir.Linear.Client
       alias SymphonyElixir.Linear.Issue
+      alias SymphonyElixir.Linear.RateLimit
       alias SymphonyElixir.Orchestrator
       alias SymphonyElixir.PromptBuilder
       alias SymphonyElixir.StatusDashboard
@@ -44,8 +45,10 @@ defmodule SymphonyElixir.TestSupport do
         Workflow.set_workflow_file_path(workflow_file)
         if Process.whereis(SymphonyElixir.WorkflowStore), do: SymphonyElixir.WorkflowStore.force_reload()
         stop_default_http_server()
+        RateLimit.clear()
 
         on_exit(fn ->
+          RateLimit.clear()
           Application.delete_env(:symphony_elixir, :workflow_file_path)
           Application.delete_env(:symphony_elixir, :server_port_override)
           Application.delete_env(:symphony_elixir, :memory_tracker_issues)
