@@ -61,6 +61,8 @@ type RunningEntry struct {
 	TotalTokens      int
 	HealthStatus     string
 	HealthIdle       time.Duration
+	HealthReason     string
+	HealthNextAction string
 	LastEvent        string
 	LastEventMessage string
 }

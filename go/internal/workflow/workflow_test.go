@@ -207,6 +207,39 @@ func TestParseConfigResolvesObservabilityOptions(t *testing.T) {
 	if cfg.Observability.RefreshMS != 2500 || cfg.Observability.RenderIntervalMS != 33 {
 		t.Fatalf("unexpected dashboard timing config: %#v", cfg.Observability)
 	}
+	if !cfg.Observability.RunHealth.Enabled ||
+		cfg.Observability.RunHealth.QuietAfterMS != int((5*time.Minute)/time.Millisecond) ||
+		cfg.Observability.RunHealth.SuspectAfterMS != int((10*time.Minute)/time.Millisecond) ||
+		cfg.Observability.RunHealth.SelfReportTimeoutMS != int((2*time.Minute)/time.Millisecond) {
+		t.Fatalf("unexpected run health defaults: %#v", cfg.Observability.RunHealth)
+	}
+}
+
+func TestParseConfigResolvesRunHealthOptions(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"observability": map[string]any{
+			"run_health": map[string]any{
+				"enabled":                false,
+				"quiet_after_ms":         10_000,
+				"suspect_after_ms":       20_000,
+				"self_report_timeout_ms": 30_000,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Observability.RunHealth.Enabled ||
+		cfg.Observability.RunHealth.QuietAfterMS != 10_000 ||
+		cfg.Observability.RunHealth.SuspectAfterMS != 20_000 ||
+		cfg.Observability.RunHealth.SelfReportTimeoutMS != 30_000 {
+		t.Fatalf("unexpected run health config: %#v", cfg.Observability.RunHealth)
+	}
 }
 
 func TestParseConfigResolvesObservabilityLogFile(t *testing.T) {

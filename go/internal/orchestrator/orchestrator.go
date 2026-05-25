@@ -44,14 +44,15 @@ type Service struct {
 }
 
 type runHandle struct {
-	cancel       context.CancelFunc
-	done         chan struct{}
-	issue        tracker.Issue
-	startedAt    time.Time
-	retryCount   int
-	turnCount    int
-	agentKind    string
-	loopReported bool
+	cancel         context.CancelFunc
+	done           chan struct{}
+	issue          tracker.Issue
+	startedAt      time.Time
+	lastProgressAt time.Time
+	retryCount     int
+	turnCount      int
+	agentKind      string
+	loopReported   bool
 }
 
 type retryHandle struct {
@@ -85,19 +86,22 @@ func (s *Service) Snapshot() statusdashboard.Snapshot {
 	defer s.mu.Unlock()
 
 	running := make([]statusdashboard.RunningEntry, 0, len(s.running))
+	now := time.Now()
 	for _, handle := range s.running {
+		health := evaluateRunHealth(*handle, now, s.cfg.Observability.RunHealth)
 		running = append(running, statusdashboard.RunningEntry{
-			Identifier:   handle.issue.Identifier,
-			State:        handle.issue.State,
-			AgentKind:    handle.agentKind,
-			RetryCount:   handle.retryCount,
-			TurnCount:    handle.turnCount,
-			StartedAt:    handle.startedAt,
-			HealthStatus: "active",
-			HealthIdle:   0,
+			Identifier:       handle.issue.Identifier,
+			State:            handle.issue.State,
+			AgentKind:        handle.agentKind,
+			RetryCount:       handle.retryCount,
+			TurnCount:        handle.turnCount,
+			StartedAt:        handle.startedAt,
+			HealthStatus:     health.Status,
+			HealthIdle:       health.Idle,
+			HealthReason:     health.Reason,
+			HealthNextAction: health.NextAction,
 		})
 	}
-	now := time.Now()
 	retrying := make([]statusdashboard.RetryEntry, 0, len(s.retrying))
 	for _, handle := range s.retrying {
 		retrying = append(retrying, statusdashboard.RetryEntry{
@@ -295,7 +299,8 @@ func (s *Service) canDispatch(issue tracker.Issue) bool {
 
 func (s *Service) dispatch(parent context.Context, issue tracker.Issue, retryCount int) {
 	ctx, cancel := context.WithCancel(parent)
-	handle := &runHandle{cancel: cancel, done: make(chan struct{}), issue: issue, startedAt: time.Now(), retryCount: retryCount, agentKind: s.cfg.Agent.Kind}
+	now := time.Now()
+	handle := &runHandle{cancel: cancel, done: make(chan struct{}), issue: issue, startedAt: now, lastProgressAt: now, retryCount: retryCount, agentKind: s.cfg.Agent.Kind}
 
 	s.mu.Lock()
 	s.running[issue.ID] = handle
@@ -476,6 +481,7 @@ func (s *Service) recordCompletedTurn(issueID string, turn int) {
 	defer s.mu.Unlock()
 	if handle, ok := s.running[issueID]; ok && turn > handle.turnCount {
 		handle.turnCount = turn
+		handle.lastProgressAt = time.Now()
 	}
 }
 
