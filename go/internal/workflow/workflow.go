@@ -101,12 +101,20 @@ type AgentConfig struct {
 }
 
 type ObservabilityConfig struct {
-	LogJSON          bool   `yaml:"log_json"`
-	LogLevel         string `yaml:"log_level"`
-	LogFile          string `yaml:"log_file"`
-	DashboardEnabled bool   `yaml:"dashboard_enabled"`
-	RefreshMS        int    `yaml:"refresh_ms"`
-	RenderIntervalMS int    `yaml:"render_interval_ms"`
+	LogJSON          bool            `yaml:"log_json"`
+	LogLevel         string          `yaml:"log_level"`
+	LogFile          string          `yaml:"log_file"`
+	DashboardEnabled bool            `yaml:"dashboard_enabled"`
+	RefreshMS        int             `yaml:"refresh_ms"`
+	RenderIntervalMS int             `yaml:"render_interval_ms"`
+	RunHealth        RunHealthConfig `yaml:"run_health"`
+}
+
+type RunHealthConfig struct {
+	Enabled             bool `yaml:"enabled"`
+	QuietAfterMS        int  `yaml:"quiet_after_ms"`
+	SuspectAfterMS      int  `yaml:"suspect_after_ms"`
+	SelfReportTimeoutMS int  `yaml:"self_report_timeout_ms"`
 }
 
 type LoopMonitorConfig struct {
@@ -243,6 +251,12 @@ func defaultConfig() Config {
 			DashboardEnabled: true,
 			RefreshMS:        int(time.Second / time.Millisecond),
 			RenderIntervalMS: 16,
+			RunHealth: RunHealthConfig{
+				Enabled:             true,
+				QuietAfterMS:        int((5 * time.Minute) / time.Millisecond),
+				SuspectAfterMS:      int((10 * time.Minute) / time.Millisecond),
+				SelfReportTimeoutMS: int((2 * time.Minute) / time.Millisecond),
+			},
 		},
 	}
 }
@@ -365,6 +379,18 @@ func (c *Config) Resolve() error {
 	}
 	if c.Observability.RenderIntervalMS <= 0 {
 		return errors.New("observability.render_interval_ms must be > 0")
+	}
+	if c.Observability.RunHealth.QuietAfterMS <= 0 {
+		c.Observability.RunHealth.QuietAfterMS = int((5 * time.Minute) / time.Millisecond)
+	}
+	if c.Observability.RunHealth.SuspectAfterMS <= 0 {
+		c.Observability.RunHealth.SuspectAfterMS = int((10 * time.Minute) / time.Millisecond)
+	}
+	if c.Observability.RunHealth.SelfReportTimeoutMS <= 0 {
+		c.Observability.RunHealth.SelfReportTimeoutMS = int((2 * time.Minute) / time.Millisecond)
+	}
+	if c.Observability.RunHealth.SuspectAfterMS <= c.Observability.RunHealth.QuietAfterMS {
+		return errors.New("observability.run_health.suspect_after_ms must be greater than quiet_after_ms")
 	}
 
 	switch c.Tracker.Kind {

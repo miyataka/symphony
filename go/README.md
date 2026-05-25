@@ -65,6 +65,11 @@ observability:
   dashboard_enabled: true
   refresh_ms: 1000
   render_interval_ms: 16
+  run_health:
+    enabled: true
+    quiet_after_ms: 300000
+    suspect_after_ms: 600000
+    self_report_timeout_ms: 120000
 ```
 
 When `log_file` is set, Symphony appends structured events to the file *and* mirrors them to
@@ -75,6 +80,10 @@ history.
 
 The terminal dashboard is enabled by default and renders a compact lipgloss status frame with the
 current running agents. Set `observability.dashboard_enabled: false` to keep stdout log-only.
+Run health is also enabled by default. Because the Go implementation currently launches a
+shell-based `agent.command`, health is based on time since dispatch or the last completed turn:
+`active` before `quiet_after_ms`, `quiet` before `suspect_after_ms`, `suspect` until
+`self_report_timeout_ms` elapses, and then `stalled`.
 
 Without `log_file`, you can still capture stdout from another session via `tee`:
 
