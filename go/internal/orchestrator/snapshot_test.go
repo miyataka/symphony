@@ -16,16 +16,18 @@ func TestSnapshotCopiesRunningEntries(t *testing.T) {
 	cfg.Tracker.ProjectNumber = 12
 	service := New(Options{Config: cfg, Tracker: &recordingTracker{}})
 	startedAt := time.Date(2026, 5, 23, 10, 0, 0, 0, time.UTC)
+	lastProgressAt := time.Now().Add(-7 * time.Minute)
 	service.running["I_1"] = &runHandle{
 		issue: tracker.Issue{
 			ID:         "I_1",
 			Identifier: "repo#1",
 			State:      "In Progress",
 		},
-		startedAt:  startedAt,
-		retryCount: 2,
-		turnCount:  4,
-		agentKind:  "codex",
+		startedAt:      startedAt,
+		lastProgressAt: lastProgressAt,
+		retryCount:     2,
+		turnCount:      4,
+		agentKind:      "codex",
 	}
 
 	snapshot := service.Snapshot()
@@ -45,6 +47,12 @@ func TestSnapshotCopiesRunningEntries(t *testing.T) {
 	entry := snapshot.Running[0]
 	if entry.Identifier != "repo#1" || entry.State != "In Progress" || entry.RetryCount != 2 || entry.TurnCount != 4 || entry.AgentKind != "codex" || !entry.StartedAt.Equal(startedAt) {
 		t.Fatalf("unexpected running entry: %#v", entry)
+	}
+	if entry.HealthStatus != "quiet" || entry.HealthReason != "quiet" || entry.HealthNextAction != "watching" {
+		t.Fatalf("unexpected health fields: %#v", entry)
+	}
+	if entry.HealthIdle < 7*time.Minute || entry.HealthIdle > 8*time.Minute {
+		t.Fatalf("unexpected health idle: %s", entry.HealthIdle)
 	}
 
 	entry.Identifier = "mutated"
