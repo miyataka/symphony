@@ -35,6 +35,7 @@ package codexappserver
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -52,7 +53,7 @@ func TestStartInitializesAndStartsThread(t *testing.T) {
 			events = append(events, event)
 		},
 	})
-	if err := client.Start(t.Context()); err != nil {
+	if err := client.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
@@ -386,12 +387,12 @@ func TestRunTurnSendsTextInputAndCompletes(t *testing.T) {
 			events = append(events, event)
 		},
 	})
-	if err := client.Start(t.Context()); err != nil {
+	if err := client.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
 
-	result, err := client.RunTurn(t.Context(), "hello from symphony")
+	result, err := client.RunTurn(context.Background(), "hello from symphony")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -602,12 +603,12 @@ func TestRunTurnReturnsInputRequiredForServerRequest(t *testing.T) {
 		Workspace: workspace,
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
-	if err := client.Start(t.Context()); err != nil {
+	if err := client.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
 
-	_, err := client.RunTurn(t.Context(), "needs approval")
+	_, err := client.RunTurn(context.Background(), "needs approval")
 	if !errors.Is(err, ErrInputRequired) {
 		t.Fatalf("expected ErrInputRequired, got %v", err)
 	}
@@ -624,12 +625,12 @@ func TestRunTurnEmitsMalformedAndContinues(t *testing.T) {
 		Workspace: workspace,
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
-	if err := client.Start(t.Context()); err != nil {
+	if err := client.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
 
-	if _, err := client.RunTurn(t.Context(), "malformed tolerated"); err != nil {
+	if _, err := client.RunTurn(context.Background(), "malformed tolerated"); err != nil {
 		t.Fatal(err)
 	}
 	var malformed bool
