@@ -16,6 +16,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/miyataka/symphony/go/internal/codexappserver"
 	"github.com/miyataka/symphony/go/internal/statusdashboard"
 	"github.com/miyataka/symphony/go/internal/tracker"
 	"github.com/miyataka/symphony/go/internal/workflow"
@@ -52,6 +53,10 @@ type runHandle struct {
 	retryCount     int
 	turnCount      int
 	agentKind      string
+	sessionID      string
+	totalTokens    int
+	lastEvent      string
+	lastEventMsg   string
 	loopReported   bool
 }
 
@@ -96,6 +101,10 @@ func (s *Service) Snapshot() statusdashboard.Snapshot {
 			RetryCount:       handle.retryCount,
 			TurnCount:        handle.turnCount,
 			StartedAt:        handle.startedAt,
+			SessionID:        handle.sessionID,
+			TotalTokens:      handle.totalTokens,
+			LastEvent:        handle.lastEvent,
+			LastEventMessage: handle.lastEventMsg,
 			HealthStatus:     health.Status,
 			HealthIdle:       health.Idle,
 			HealthReason:     health.Reason,
@@ -485,6 +494,31 @@ func (s *Service) recordCompletedTurn(issueID string, turn int) {
 	}
 }
 
+func (s *Service) recordAppServerEvent(issueID string, event codexappserver.Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	handle, ok := s.running[issueID]
+	if !ok {
+		return
+	}
+	if event.ThreadID != "" {
+		handle.sessionID = event.ThreadID
+		if event.TurnID != "" {
+			handle.sessionID += "/" + event.TurnID
+		}
+	}
+	if event.Usage != nil {
+		handle.totalTokens = int(event.Usage.TotalTokens)
+	}
+	name := string(event.Type)
+	if event.Method != "" {
+		name = event.Method
+	}
+	handle.lastEvent = name
+	handle.lastEventMsg = event.Message
+	handle.lastProgressAt = time.Now()
+}
+
 func (s *Service) updateRunHandleAgent(issueID, agentKind string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -614,6 +648,10 @@ func (s *Service) runAgentTurnWithProfile(parent context.Context, path string, i
 		return err
 	}
 
+	if profile.Runtime == "app-server" {
+		return s.runAppServerTurn(parent, path, issue, prompt, profile)
+	}
+
 	if strings.TrimSpace(profile.Command) == "" {
 		promptPath, err := writeWorkspacePrompt(path, prompt)
 		if err != nil {
@@ -659,6 +697,27 @@ func (s *Service) runAgentTurnWithProfile(parent context.Context, path string, i
 	}
 	if !output.Seen() {
 		return errAgentCommandNoOutput
+	}
+	return nil
+}
+
+func (s *Service) runAppServerTurn(parent context.Context, path string, issue tracker.Issue, prompt string, profile agentProfile) error {
+	ctx, cancel := context.WithTimeout(parent, s.cfg.TurnTimeout())
+	defer cancel()
+
+	client := codexappserver.New(codexappserver.Options{
+		Command:   profile.AppServerCommand,
+		Workspace: path,
+		OnEvent: func(event codexappserver.Event) {
+			s.recordAppServerEvent(issue.ID, event)
+		},
+	})
+	if err := client.Start(ctx); err != nil {
+		return fmt.Errorf("codex app-server start: %w", err)
+	}
+	defer client.Close()
+	if _, err := client.RunTurn(ctx, prompt); err != nil {
+		return fmt.Errorf("codex app-server turn: %w", err)
 	}
 	return nil
 }

@@ -20,8 +20,10 @@ const (
 )
 
 type agentProfile struct {
-	Kind    string
-	Command string
+	Kind             string
+	Runtime          string
+	Command          string
+	AppServerCommand string
 }
 
 type agentCommandError struct {
@@ -65,8 +67,10 @@ type agentAttemptState struct {
 
 func (s *Service) primaryAgentProfile() agentProfile {
 	return agentProfile{
-		Kind:    s.cfg.Agent.Kind,
-		Command: s.cfg.Agent.Command,
+		Kind:             s.cfg.Agent.Kind,
+		Runtime:          s.cfg.Agent.Runtime,
+		Command:          s.cfg.Agent.Command,
+		AppServerCommand: s.cfg.Agent.AppServerCommand,
 	}
 }
 
@@ -79,6 +83,7 @@ func (s *Service) configuredFallbackProfile() (agentProfile, bool) {
 	}
 	return agentProfile{
 		Kind:    s.cfg.Agent.Fallback.Kind,
+		Runtime: "command",
 		Command: s.cfg.Agent.Fallback.Command,
 	}, true
 }
