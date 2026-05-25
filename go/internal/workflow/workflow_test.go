@@ -699,3 +699,85 @@ TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp" codex exec --sandbox workspa
 		t.Fatalf("expected default codex command\n  want: %q\n  got:  %q", expected, cfg.Agent.Command)
 	}
 }
+
+func TestParseConfigDefaultsAgentRuntimeToCommand(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Runtime != "command" {
+		t.Fatalf("expected default agent runtime command, got %q", cfg.Agent.Runtime)
+	}
+	if cfg.Agent.AppServerCommand != "codex app-server" {
+		t.Fatalf("expected default app-server command, got %q", cfg.Agent.AppServerCommand)
+	}
+}
+
+func TestParseConfigAcceptsCodexAppServerRuntime(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"agent": map[string]any{
+			"kind":               "codex",
+			"runtime":            " app-server ",
+			"app_server_command": "codex app-server --experimental",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Runtime != "app-server" {
+		t.Fatalf("expected normalized app-server runtime, got %q", cfg.Agent.Runtime)
+	}
+	if cfg.Agent.AppServerCommand != "codex app-server --experimental" {
+		t.Fatalf("expected custom app-server command preserved, got %q", cfg.Agent.AppServerCommand)
+	}
+}
+
+func TestParseConfigRejectsUnknownAgentRuntime(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	_, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"agent": map[string]any{
+			"runtime": "sidecar",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected unknown agent runtime to fail")
+	}
+	if !strings.Contains(err.Error(), "agent.runtime") {
+		t.Fatalf("expected error to mention agent.runtime, got %v", err)
+	}
+}
+
+func TestParseConfigRejectsAppServerRuntimeForClaudeCode(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	_, err := ParseConfig(map[string]any{
+		"tracker": map[string]any{
+			"owner":          "miyataka",
+			"project_number": 1,
+		},
+		"agent": map[string]any{
+			"kind":    "claude-code",
+			"runtime": "app-server",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected claude-code app-server runtime to fail")
+	}
+	if !strings.Contains(err.Error(), "agent.runtime") {
+		t.Fatalf("expected error to mention agent.runtime, got %v", err)
+	}
+}

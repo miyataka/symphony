@@ -89,7 +89,9 @@ type AgentFallbackConfig struct {
 
 type AgentConfig struct {
 	Kind                       string              `yaml:"kind"`
+	Runtime                    string              `yaml:"runtime"`
 	Command                    string              `yaml:"command"`
+	AppServerCommand           string              `yaml:"app_server_command"`
 	Fallback                   AgentFallbackConfig `yaml:"fallback"`
 	FallbackKinds              []string            `yaml:"fallback_kinds"`
 	FallbackOn                 []string            `yaml:"fallback_on"`
@@ -276,8 +278,24 @@ func (c *Config) Resolve() error {
 	default:
 		return fmt.Errorf("agent.kind must be \"codex\" or \"claude-code\", got %q", c.Agent.Kind)
 	}
+	c.Agent.Runtime = strings.ToLower(strings.TrimSpace(c.Agent.Runtime))
+	if c.Agent.Runtime == "" {
+		c.Agent.Runtime = "command"
+	}
+	switch c.Agent.Runtime {
+	case "command", "app-server":
+	default:
+		return fmt.Errorf("agent.runtime must be \"command\" or \"app-server\", got %q", c.Agent.Runtime)
+	}
+	if c.Agent.Runtime == "app-server" && c.Agent.Kind != "codex" {
+		return fmt.Errorf("agent.runtime app-server is only supported for agent.kind \"codex\", got %q", c.Agent.Kind)
+	}
 	if strings.TrimSpace(c.Agent.Command) == "" {
 		c.Agent.Command = defaultAgentCommand(c.Agent.Kind)
+	}
+	c.Agent.AppServerCommand = strings.TrimSpace(c.Agent.AppServerCommand)
+	if c.Agent.AppServerCommand == "" {
+		c.Agent.AppServerCommand = "codex app-server"
 	}
 	if err := c.resolveAgentFallback(); err != nil {
 		return err

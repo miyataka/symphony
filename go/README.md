@@ -5,8 +5,8 @@ tracker.
 
 > [!WARNING]
 > This is an experimental implementation for trusted environments. It currently launches a
-> shell-based `agent.command` inside each issue workspace rather than implementing the full Codex
-> app-server streaming protocol from the Elixir reference implementation.
+> shell-based `agent.command` by default. Codex app-server execution is available as an opt-in
+> runtime for `agent.kind: codex`.
 
 ## What it does
 
@@ -14,8 +14,8 @@ tracker.
 2. Polls a GitHub Projects v2 board for issues in configured active states
 3. Creates a deterministic workspace per issue
 4. Runs workspace lifecycle hooks
-5. Writes the rendered prompt to a temporary file for `agent.command`
-6. Runs `agent.command` inside the workspace with issue metadata in environment variables
+5. Renders the agent prompt for the current issue and turn
+6. Runs either `agent.command` or a Codex app-server turn inside the workspace
 7. Reconciles running work against GitHub Project status and retries failed runs with backoff
 8. Updates GitHub Project status and a persistent `## Codex Workpad` issue comment when possible
 9. Monitors long-running issue loops and creates backlog sub-issues when work needs to be split
@@ -80,8 +80,9 @@ history.
 
 The terminal dashboard is enabled by default and renders a compact lipgloss status frame with the
 current running agents. Set `observability.dashboard_enabled: false` to keep stdout log-only.
-Run health is also enabled by default. Because the Go implementation currently launches a
-shell-based `agent.command`, health is based on time since dispatch or the last completed turn:
+Run health is also enabled by default. For shell-based `agent.command`, health is based on time
+since dispatch or the last completed turn. For Codex app-server turns, streamed app-server events
+also refresh run activity and populate session, event, and token fields in the dashboard. Runs are
 `active` before `quiet_after_ms`, `quiet` before `suspect_after_ms`, `suspect` until
 `self_report_timeout_ms` elapses, and then `stalled`.
 
@@ -110,6 +111,29 @@ Symphony selects per-agent defaults from `agent.kind` in the workflow front matt
 Both `agent.command` and `tracker.workpad_marker` can be overridden per workflow. `agent.kind` is normalized to lower case and an unknown value is rejected at workflow load time.
 
 `claude-code` requires the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and on `PATH`. The default command runs Claude Code with `--dangerously-skip-permissions` because Symphony already isolates each issue inside a per-issue workspace; if you need stricter sandboxing, set `agent.command` explicitly.
+
+### Agent runtimes
+
+`agent.runtime` selects how the active agent is executed:
+
+| `agent.runtime`      | Supported `agent.kind` | Behavior |
+|----------------------|------------------------|----------|
+| `command` (omitted)  | `codex`, `claude-code` | Write the prompt to a temporary file, then run `agent.command`. |
+| `app-server`         | `codex`                | Start `agent.app_server_command`, send the prompt over the Codex app-server protocol, and stream status events into the dashboard. |
+
+`agent.app_server_command` defaults to `codex app-server`. The command runtime remains the default
+for backward compatibility.
+
+Minimal Codex app-server example:
+
+```yaml
+agent:
+  kind: codex
+  runtime: app-server
+  app_server_command: codex app-server
+  max_concurrent_agents: 4
+  max_turns: 20
+```
 
 Minimal `claude-code` example:
 
@@ -434,8 +458,7 @@ make all
 
 ## Current limitations
 
-- A standalone Codex app-server JSON-RPC client package exists under
-  `internal/codexappserver`, but the orchestrator still uses `agent.command`. App-server execution
-  will be wired behind an opt-in runner in a later change.
+- Codex app-server execution is opt-in and currently supports one synchronous turn at a time per
+  issue run.
 - `WORKFLOW.md` is read once at startup; SPEC §6.2 dynamic reload is not implemented yet. See
   [`docs/hot_reload.md`](docs/hot_reload.md) for the proposed conformance path.

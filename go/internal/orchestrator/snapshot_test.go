@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/miyataka/symphony/go/internal/codexappserver"
 	"github.com/miyataka/symphony/go/internal/tracker"
 )
 
@@ -58,6 +59,57 @@ func TestSnapshotCopiesRunningEntries(t *testing.T) {
 	entry.Identifier = "mutated"
 	if service.running["I_1"].issue.Identifier != "repo#1" {
 		t.Fatalf("snapshot mutation changed service state")
+	}
+}
+
+func TestRecordAppServerEventUpdatesRunningSnapshot(t *testing.T) {
+	cfg := testConfig()
+	service := New(Options{Config: cfg, Tracker: &recordingTracker{}})
+	service.running["I_1"] = &runHandle{
+		issue: tracker.Issue{
+			ID:         "I_1",
+			Identifier: "repo#1",
+			State:      "In Progress",
+		},
+		startedAt:      time.Now().Add(-time.Minute),
+		lastProgressAt: time.Now().Add(-time.Minute),
+		agentKind:      "codex",
+	}
+
+	service.recordAppServerEvent("I_1", codexappserver.Event{
+		Type:     codexappserver.EventNotification,
+		ThreadID: "thread-abcdef123456",
+		TurnID:   "turn-1",
+		Method:   "thread/tokenUsage/updated",
+		Usage: &codexappserver.TokenUsage{
+			TotalTokens: 45,
+		},
+	})
+	service.recordAppServerEvent("I_1", codexappserver.Event{
+		Type:     codexappserver.EventToolCallUnsupported,
+		ThreadID: "thread-abcdef123456",
+		TurnID:   "turn-1",
+		Method:   "item/tool/call",
+		Message:  "Unsupported dynamic tool: linear_graphql",
+	})
+
+	snapshot := service.Snapshot()
+
+	if len(snapshot.Running) != 1 {
+		t.Fatalf("expected one running entry, got %#v", snapshot.Running)
+	}
+	entry := snapshot.Running[0]
+	if entry.SessionID != "thread-abcdef123456/turn-1" {
+		t.Fatalf("unexpected session id: %q", entry.SessionID)
+	}
+	if entry.TotalTokens != 45 {
+		t.Fatalf("unexpected total tokens: %d", entry.TotalTokens)
+	}
+	if entry.LastEvent != "item/tool/call" {
+		t.Fatalf("unexpected last event: %q", entry.LastEvent)
+	}
+	if entry.LastEventMessage != "Unsupported dynamic tool: linear_graphql" {
+		t.Fatalf("unexpected last event message: %q", entry.LastEventMessage)
 	}
 }
 

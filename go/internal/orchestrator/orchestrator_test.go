@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -228,6 +229,41 @@ func TestRunAgentTurnUsesTempPromptOutsideWorkspace(t *testing.T) {
 	}
 }
 
+func TestRunAgentTurnUsesAppServerRuntime(t *testing.T) {
+	cfg := testConfig()
+	cfg.Agent.Runtime = "app-server"
+	cfg.Agent.Command = `printf 'command runtime used\n'; exit 42`
+	promptOut := filepath.Join(t.TempDir(), "prompt.txt")
+	cfg.Agent.AppServerCommand = fakeOrchestratorAppServerCommand("turn-complete", promptOut)
+	service := New(Options{
+		Config:         cfg,
+		PromptTemplate: "Issue {{ .Issue.Identifier }} turn {{ .Turn }}",
+		Tracker:        &recordingTracker{},
+	})
+	workspace := t.TempDir()
+
+	err := service.runAgentTurn(context.Background(), workspace, tracker.Issue{
+		ID:         "I_1",
+		Identifier: "repo#1",
+		Title:      "Issue",
+		State:      "In Progress",
+	}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prompt, err := os.ReadFile(promptOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(prompt) != "Issue repo#1 turn 2\n" {
+		t.Fatalf("unexpected app-server prompt: %q", prompt)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".symphony", "prompt.md")); !os.IsNotExist(err) {
+		t.Fatalf("workspace prompt should not be written for app-server runs: %v", err)
+	}
+}
+
 func TestRunAgentTurnRejectsEmptyCommandOutput(t *testing.T) {
 	cfg := testConfig()
 	cfg.Agent.Command = `true`
@@ -278,6 +314,93 @@ func TestRunIssueRecordsEmptyOutputReason(t *testing.T) {
 	if strings.Contains(recorder.workpad, "ready for review") {
 		t.Fatalf("expected workpad not to mark issue ready for review, got: %q", recorder.workpad)
 	}
+}
+
+func fakeOrchestratorAppServerCommand(mode, promptOut string) string {
+	return fmt.Sprintf(
+		"SYMPHONY_FAKE_ORCHESTRATOR_APP_SERVER=1 SYMPHONY_FAKE_ORCHESTRATOR_PROMPT_OUT=%s %s -test.run=TestFakeOrchestratorAppServer -- %s",
+		strconv.Quote(promptOut),
+		strconv.Quote(os.Args[0]),
+		mode,
+	)
+}
+
+func TestFakeOrchestratorAppServer(t *testing.T) {
+	if os.Getenv("SYMPHONY_FAKE_ORCHESTRATOR_APP_SERVER") != "1" {
+		return
+	}
+	mode := os.Args[len(os.Args)-1]
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		var msg map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			fmt.Println(`not-json`)
+			continue
+		}
+		method, _ := msg["method"].(string)
+		id := msg["id"]
+		switch method {
+		case "initialize":
+			writeFakeOrchestratorJSON(map[string]any{"id": id, "result": map[string]any{
+				"codexHome":      "/tmp/codex",
+				"platformFamily": "unix",
+				"platformOs":     "darwin",
+				"userAgent":      "fake",
+			}})
+		case "initialized":
+		case "thread/start":
+			writeFakeOrchestratorJSON(map[string]any{"id": id, "result": map[string]any{"thread": map[string]any{"id": "thread-1"}}})
+		case "turn/start":
+			params, _ := msg["params"].(map[string]any)
+			prompt := fakeOrchestratorTurnInputText(params)
+			if mode == "turn-complete" && prompt != "Issue repo#1 turn 2\n" {
+				writeFakeOrchestratorJSON(map[string]any{"id": id, "error": map[string]any{"code": -32000, "message": "missing prompt text"}})
+				continue
+			}
+			if promptOut := os.Getenv("SYMPHONY_FAKE_ORCHESTRATOR_PROMPT_OUT"); promptOut != "" {
+				if err := os.WriteFile(promptOut, []byte(prompt), 0o600); err != nil {
+					os.Exit(2)
+				}
+			}
+			writeFakeOrchestratorJSON(map[string]any{"id": id, "result": map[string]any{"turn": map[string]any{"id": "turn-1"}}})
+			writeFakeOrchestratorJSON(map[string]any{
+				"method": "thread/tokenUsage/updated",
+				"params": map[string]any{
+					"threadId": "thread-1",
+					"turnId":   "turn-1",
+					"tokenUsage": map[string]any{
+						"total": map[string]any{
+							"inputTokens":       30,
+							"outputTokens":      15,
+							"cachedInputTokens": 5,
+							"totalTokens":       45,
+						},
+					},
+				},
+			})
+			writeFakeOrchestratorJSON(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread-1", "turnId": "turn-1"}})
+		default:
+			writeFakeOrchestratorJSON(map[string]any{"id": id, "error": map[string]any{"code": -32601, "message": "unknown method " + method}})
+		}
+	}
+	os.Exit(0)
+}
+
+func fakeOrchestratorTurnInputText(params map[string]any) string {
+	input, _ := params["input"].([]any)
+	for _, item := range input {
+		typed, _ := item.(map[string]any)
+		if typed["type"] == "text" {
+			text, _ := typed["text"].(string)
+			return text
+		}
+	}
+	return ""
+}
+
+func writeFakeOrchestratorJSON(value any) {
+	b, _ := json.Marshal(value)
+	fmt.Println(string(b))
 }
 
 func TestRunIssueFallsBackFromClaudeLimitToCodex(t *testing.T) {
