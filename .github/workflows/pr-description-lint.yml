@@ -4,9 +4,17 @@ on:
   pull_request:
     types: [opened, edited, reopened, synchronize, ready_for_review]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate-pr-description:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: elixir
