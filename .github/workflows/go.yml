@@ -6,9 +6,17 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   go:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: go
@@ -25,3 +33,6 @@ jobs:
 
       - name: Verify Go implementation
         run: make all
+
+      - name: Verify Go race safety
+        run: go test -race ./...
