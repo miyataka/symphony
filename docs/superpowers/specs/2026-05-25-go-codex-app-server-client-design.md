@@ -62,8 +62,12 @@ server notifications needed for dashboard and health integration later:
 - `error`
 
 Server requests such as `item/commandExecution/requestApproval`,
-`item/fileChange/requestApproval`, `item/tool/requestUserInput`, and
-`item/tool/call` are treated as input-required events in this phase.
+`item/fileChange/requestApproval`, and `item/tool/requestUserInput` are treated
+as input-required events in this phase. `item/tool/call` is different: the
+client returns a JSON-RPC success response with `success: false` and an
+`inputText` content item that names the unsupported tool, then continues the
+turn. This prevents the app-server from hanging on unimplemented dynamic tools
+without pretending that Go supports `linear_graphql` yet.
 
 ## Architecture
 
@@ -113,9 +117,12 @@ and run-health progress.
   fails startup with method context.
 - A malformed line while waiting for a specific response fails startup.
 - A malformed line during streaming emits `EventMalformed` and continues.
-- Server requests that require approval, tool execution, or user input return
-  `ErrInputRequired` and emit an input-required event.
-- Process exit before turn completion fails the turn.
+- Server requests that require approval or user input return `ErrInputRequired`
+  and emit an input-required event.
+- Dynamic tool calls return an unsupported tool response and emit
+  `EventToolCallUnsupported`.
+- Process exit before turn completion fails the turn with an error wrapping
+  `io.ErrUnexpectedEOF`.
 - Context cancellation kills the subprocess and returns the context error.
 
 ## Testing
@@ -128,7 +135,9 @@ Required tests:
 - initialize and thread start send valid JSON-RPC requests in order.
 - `RunTurn` sends a text input turn and returns on `turn/completed`.
 - token usage notifications populate `Event.Usage`.
-- server approval/tool/user-input requests return `ErrInputRequired`.
+- server approval/user-input requests return `ErrInputRequired`.
+- unsupported dynamic tool calls receive a JSON-RPC response and the turn can
+  still complete.
 - malformed streaming lines emit `EventMalformed` but do not abort the turn.
 - process exit before completion returns an error.
 

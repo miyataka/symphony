@@ -703,6 +703,79 @@ go test ./internal/codexappserver -count=1
 
 Expected: PASS.
 
+## Task 3b: Unsupported Dynamic Tool Calls and Premature Exit
+
+**Files:**
+- Modify: `go/internal/codexappserver/client.go`
+- Modify: `go/internal/codexappserver/client_test.go`
+- Modify: `docs/superpowers/specs/2026-05-25-go-codex-app-server-client-design.md`
+
+- [ ] **Step 1: Write failing unsupported tool call test**
+
+Add `TestRunTurnRespondsToUnsupportedDynamicToolCall` to
+`go/internal/codexappserver/client_test.go`. The fake app-server should send an
+`item/tool/call` request after `turn/start`, read the client's JSON-RPC
+response, assert `result.success == false`, then emit `turn/completed`.
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run:
+
+```bash
+cd go
+go test ./internal/codexappserver -run TestRunTurnRespondsToUnsupportedDynamicToolCall -count=1
+```
+
+Expected: build failure because `EventToolCallUnsupported` does not exist, or
+runtime failure because the client returns `ErrInputRequired` instead of
+responding to the tool call.
+
+- [ ] **Step 3: Implement unsupported tool response**
+
+In `go/internal/codexappserver/client.go`, add
+`EventToolCallUnsupported`, detect `method == "item/tool/call"` server requests,
+write this JSON-RPC response, emit the event, and continue the read loop:
+
+```json
+{
+  "id": "<same id as request>",
+  "result": {
+    "success": false,
+    "contentItems": [
+      {
+        "type": "inputText",
+        "text": "Unsupported dynamic tool: <tool>"
+      }
+    ]
+  }
+}
+```
+
+- [ ] **Step 4: Write failing premature exit test**
+
+Add `TestRunTurnReportsExitBeforeCompletion`. The fake app-server should answer
+`turn/start`, exit before `turn/completed`, and the test should assert the error
+wraps `io.ErrUnexpectedEOF` and includes `before turn completion`.
+
+- [ ] **Step 5: Implement contextual EOF**
+
+In `RunTurn`, when the scanner reaches EOF without `turn/completed`, return:
+
+```go
+fmt.Errorf("app-server exited before turn completion: %w", io.ErrUnexpectedEOF)
+```
+
+- [ ] **Step 6: Run package tests**
+
+Run:
+
+```bash
+cd go
+go test ./internal/codexappserver -count=1
+```
+
+Expected: PASS.
+
 ## Task 4: Documentation and Full Verification
 
 **Files:**

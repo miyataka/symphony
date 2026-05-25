@@ -20,11 +20,12 @@ var (
 type EventType string
 
 const (
-	EventSessionStarted EventType = "session_started"
-	EventNotification   EventType = "notification"
-	EventMalformed      EventType = "malformed"
-	EventInputRequired  EventType = "input_required"
-	EventTurnCompleted  EventType = "turn_completed"
+	EventSessionStarted      EventType = "session_started"
+	EventNotification        EventType = "notification"
+	EventMalformed           EventType = "malformed"
+	EventInputRequired       EventType = "input_required"
+	EventToolCallUnsupported EventType = "tool_call_unsupported"
+	EventTurnCompleted       EventType = "turn_completed"
 )
 
 type TokenUsage struct {
@@ -178,6 +179,13 @@ func (c *Client) RunTurn(ctx context.Context, prompt string) (TurnResult, error)
 			continue
 		}
 		method, _ := msg["method"].(string)
+		if isDynamicToolCallRequest(msg) {
+			if err := c.respondUnsupportedToolCall(msg); err != nil {
+				return TurnResult{}, err
+			}
+			c.emit(Event{Type: EventToolCallUnsupported, ThreadID: threadID, TurnID: turnID, Method: method, Raw: raw})
+			continue
+		}
 		if isServerRequest(msg) {
 			c.emit(Event{Type: EventInputRequired, ThreadID: threadID, TurnID: turnID, Method: method, Raw: raw})
 			return TurnResult{}, ErrInputRequired
@@ -196,7 +204,7 @@ func (c *Client) RunTurn(ctx context.Context, prompt string) (TurnResult, error)
 	if err := c.lines.Err(); err != nil {
 		return TurnResult{}, err
 	}
-	return TurnResult{}, io.EOF
+	return TurnResult{}, fmt.Errorf("app-server exited before turn completion: %w", io.ErrUnexpectedEOF)
 }
 
 func (c *Client) call(ctx context.Context, method string, params any) (map[string]any, error) {
@@ -235,6 +243,25 @@ func (c *Client) call(ctx context.Context, method string, params any) (map[strin
 
 func (c *Client) notify(method string, params any) error {
 	return c.write(map[string]any{"method": method, "params": params})
+}
+
+func (c *Client) respondUnsupportedToolCall(msg map[string]any) error {
+	id := msg["id"]
+	params, _ := msg["params"].(map[string]any)
+	tool := stringValue(params["tool"])
+	if tool == "" {
+		tool = "unknown"
+	}
+	return c.write(map[string]any{
+		"id": id,
+		"result": map[string]any{
+			"success": false,
+			"contentItems": []map[string]any{{
+				"type": "inputText",
+				"text": "Unsupported dynamic tool: " + tool,
+			}},
+		},
+	})
 }
 
 func (c *Client) write(msg map[string]any) error {
@@ -319,6 +346,12 @@ func isServerRequest(msg map[string]any) bool {
 	_, hasID := msg["id"]
 	method, _ := msg["method"].(string)
 	return hasID && method != ""
+}
+
+func isDynamicToolCallRequest(msg map[string]any) bool {
+	method, _ := msg["method"].(string)
+	_, hasID := msg["id"]
+	return hasID && method == "item/tool/call"
 }
 
 func int64Number(value any) int64 {
