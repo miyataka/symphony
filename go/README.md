@@ -434,7 +434,8 @@ make all
 
 ## Current limitations
 
-- The Codex app-server JSON-RPC protocol is not implemented yet. Use `agent.command` as the bridge
-  to Codex or another coding agent.
+- A standalone Codex app-server JSON-RPC client package exists under
+  `internal/codexappserver`, but the orchestrator still uses `agent.command`. App-server execution
+  will be wired behind an opt-in runner in a later change.
 - `WORKFLOW.md` is read once at startup; SPEC §6.2 dynamic reload is not implemented yet. See
   [`docs/hot_reload.md`](docs/hot_reload.md) for the proposed conformance path.
