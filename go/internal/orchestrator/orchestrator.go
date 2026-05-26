@@ -67,6 +67,11 @@ type retryHandle struct {
 	err     string
 }
 
+type agentTurnRunner interface {
+	RunTurn(context.Context, tracker.Issue, int) error
+	Close() error
+}
+
 func New(opts Options) *Service {
 	logger := opts.Logger
 	if logger == nil {
@@ -427,12 +432,17 @@ func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) (runErr err
 		s.upsertWorkpad(ctx, issue, s.workpadBody(issue, "Running", path, note))
 	}
 
+	runner := s.newAgentTurnRunner(path, profile)
+	defer func() {
+		_ = runner.Close()
+	}()
+
 	for turn := 1; turn <= s.cfg.Agent.MaxTurns; turn++ {
 		for {
 			if err := workspace.RunBefore(ctx, path, s.cfg.Hooks, issue, s.cfg.HookTimeout()); err != nil {
 				return fmt.Errorf("before_run hook: %w", err)
 			}
-			if err := s.runAgentTurnWithProfile(ctx, path, issue, turn, profile); err != nil {
+			if err := runner.RunTurn(ctx, issue, turn); err != nil {
 				s.runAfterBestEffort(ctx, path, issue)
 				if fallbackProfile, reason, ok := s.fallbackProfileForFailure(profile, err); ok {
 					if err := s.recordFallbackState(path, issue, turn, profile, fallbackProfile, reason); err != nil {
@@ -451,6 +461,8 @@ func (s *Service) runIssue(ctx context.Context, issue tracker.Issue) (runErr err
 					)
 					s.upsertWorkpad(ctx, issue, s.workpadBody(issue, "Running", path, fallbackTransitionWorkpadNote(profile.Kind, fallbackProfile.Kind)))
 					profile = fallbackProfile
+					_ = runner.Close()
+					runner = s.newAgentTurnRunner(path, profile)
 					continue
 				}
 				s.markFallbackStateFailed(path, issue, profile, err)
@@ -643,13 +655,32 @@ func (s *Service) runAgentTurn(parent context.Context, path string, issue tracke
 }
 
 func (s *Service) runAgentTurnWithProfile(parent context.Context, path string, issue tracker.Issue, turn int, profile agentProfile) error {
+	runner := s.newAgentTurnRunner(path, profile)
+	defer runner.Close()
+	return runner.RunTurn(parent, issue, turn)
+}
+
+func (s *Service) newAgentTurnRunner(path string, profile agentProfile) agentTurnRunner {
+	if profile.Runtime == "app-server" {
+		return &appServerAgentRunner{service: s, path: path, profile: profile}
+	}
+	return &commandAgentRunner{service: s, path: path, profile: profile}
+}
+
+type commandAgentRunner struct {
+	service *Service
+	path    string
+	profile agentProfile
+}
+
+func (r *commandAgentRunner) RunTurn(parent context.Context, issue tracker.Issue, turn int) error {
+	s := r.service
+	path := r.path
+	profile := r.profile
+
 	prompt, err := renderPrompt(s.promptTemplate, issue, turn)
 	if err != nil {
 		return err
-	}
-
-	if profile.Runtime == "app-server" {
-		return s.runAppServerTurn(parent, path, issue, prompt, profile)
 	}
 
 	if strings.TrimSpace(profile.Command) == "" {
@@ -701,25 +732,49 @@ func (s *Service) runAgentTurnWithProfile(parent context.Context, path string, i
 	return nil
 }
 
-func (s *Service) runAppServerTurn(parent context.Context, path string, issue tracker.Issue, prompt string, profile agentProfile) error {
-	ctx, cancel := context.WithTimeout(parent, s.cfg.TurnTimeout())
-	defer cancel()
+func (r *commandAgentRunner) Close() error {
+	return nil
+}
 
-	client := codexappserver.New(codexappserver.Options{
-		Command:   profile.AppServerCommand,
-		Workspace: path,
-		OnEvent: func(event codexappserver.Event) {
-			s.recordAppServerEvent(issue.ID, event)
-		},
-	})
-	if err := client.Start(ctx); err != nil {
-		return fmt.Errorf("codex app-server start: %w", err)
+type appServerAgentRunner struct {
+	service *Service
+	path    string
+	profile agentProfile
+	client  *codexappserver.Client
+}
+
+func (r *appServerAgentRunner) RunTurn(parent context.Context, issue tracker.Issue, turn int) error {
+	prompt, err := renderPrompt(r.service.promptTemplate, issue, turn)
+	if err != nil {
+		return err
 	}
-	defer client.Close()
-	if _, err := client.RunTurn(ctx, prompt); err != nil {
+	if r.client == nil {
+		client := codexappserver.New(codexappserver.Options{
+			Command:   r.profile.AppServerCommand,
+			Workspace: r.path,
+			OnEvent: func(event codexappserver.Event) {
+				r.service.recordAppServerEvent(issue.ID, event)
+			},
+		})
+		if err := client.Start(parent); err != nil {
+			return fmt.Errorf("codex app-server start: %w", err)
+		}
+		r.client = client
+	}
+
+	ctx, cancel := context.WithTimeout(parent, r.service.cfg.TurnTimeout())
+	defer cancel()
+	if _, err := r.client.RunTurn(ctx, prompt); err != nil {
 		return fmt.Errorf("codex app-server turn: %w", err)
 	}
 	return nil
+}
+
+func (r *appServerAgentRunner) Close() error {
+	if r.client == nil {
+		return nil
+	}
+	return r.client.Close()
 }
 
 type agentOutputActivity struct {

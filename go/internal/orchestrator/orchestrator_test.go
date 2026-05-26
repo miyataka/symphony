@@ -264,6 +264,47 @@ func TestRunAgentTurnUsesAppServerRuntime(t *testing.T) {
 	}
 }
 
+func TestRunIssueReusesAppServerSessionAcrossTurns(t *testing.T) {
+	cfg := testConfig()
+	cfg.Workspace.Root = t.TempDir()
+	cfg.Agent.Runtime = "app-server"
+	cfg.Agent.MaxTurns = 2
+	tracePath := filepath.Join(t.TempDir(), "app-server.trace")
+	cfg.Agent.AppServerCommand = fakeOrchestratorAppServerTraceCommand("multi-turn", tracePath)
+	issue := tracker.Issue{
+		ID:                      "I_1",
+		Identifier:              "repo#1",
+		Title:                   "Issue",
+		State:                   "In Progress",
+		RepositoryNameWithOwner: "repo",
+	}
+	service := New(Options{
+		Config:         cfg,
+		PromptTemplate: "Issue {{ .Issue.Identifier }} turn {{ .Turn }}",
+		Tracker:        &stateOnlyTracker{issueStatesByID: []tracker.Issue{issue}},
+	})
+
+	err := service.runIssue(context.Background(), issue)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	trace, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(trace)), "\n")
+	if got := countTraceLines(lines, "initialize"); got != 1 {
+		t.Fatalf("expected one app-server initialize, got %d in trace:\n%s", got, trace)
+	}
+	if got := countTraceLines(lines, "thread/start"); got != 1 {
+		t.Fatalf("expected one app-server thread/start, got %d in trace:\n%s", got, trace)
+	}
+	if got := countTraceLines(lines, "turn/start"); got != 2 {
+		t.Fatalf("expected two app-server turn/start calls, got %d in trace:\n%s", got, trace)
+	}
+}
+
 func TestRunAgentTurnRejectsEmptyCommandOutput(t *testing.T) {
 	cfg := testConfig()
 	cfg.Agent.Command = `true`
@@ -325,12 +366,22 @@ func fakeOrchestratorAppServerCommand(mode, promptOut string) string {
 	)
 }
 
+func fakeOrchestratorAppServerTraceCommand(mode, tracePath string) string {
+	return fmt.Sprintf(
+		"SYMPHONY_FAKE_ORCHESTRATOR_APP_SERVER=1 SYMPHONY_FAKE_ORCHESTRATOR_TRACE=%s %s -test.run=TestFakeOrchestratorAppServer -- %s",
+		strconv.Quote(tracePath),
+		strconv.Quote(os.Args[0]),
+		mode,
+	)
+}
+
 func TestFakeOrchestratorAppServer(t *testing.T) {
 	if os.Getenv("SYMPHONY_FAKE_ORCHESTRATOR_APP_SERVER") != "1" {
 		return
 	}
 	mode := os.Args[len(os.Args)-1]
 	scanner := bufio.NewScanner(os.Stdin)
+	turnStarts := 0
 	for scanner.Scan() {
 		var msg map[string]any
 		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
@@ -338,6 +389,7 @@ func TestFakeOrchestratorAppServer(t *testing.T) {
 			continue
 		}
 		method, _ := msg["method"].(string)
+		traceFakeOrchestratorMethod(method)
 		id := msg["id"]
 		switch method {
 		case "initialize":
@@ -351,6 +403,7 @@ func TestFakeOrchestratorAppServer(t *testing.T) {
 		case "thread/start":
 			writeFakeOrchestratorJSON(map[string]any{"id": id, "result": map[string]any{"thread": map[string]any{"id": "thread-1"}}})
 		case "turn/start":
+			turnStarts++
 			params, _ := msg["params"].(map[string]any)
 			prompt := fakeOrchestratorTurnInputText(params)
 			if mode == "turn-complete" && prompt != "Issue repo#1 turn 2\n" {
@@ -362,12 +415,13 @@ func TestFakeOrchestratorAppServer(t *testing.T) {
 					os.Exit(2)
 				}
 			}
-			writeFakeOrchestratorJSON(map[string]any{"id": id, "result": map[string]any{"turn": map[string]any{"id": "turn-1"}}})
+			turnID := fmt.Sprintf("turn-%d", turnStarts)
+			writeFakeOrchestratorJSON(map[string]any{"id": id, "result": map[string]any{"turn": map[string]any{"id": turnID}}})
 			writeFakeOrchestratorJSON(map[string]any{
 				"method": "thread/tokenUsage/updated",
 				"params": map[string]any{
 					"threadId": "thread-1",
-					"turnId":   "turn-1",
+					"turnId":   turnID,
 					"tokenUsage": map[string]any{
 						"total": map[string]any{
 							"inputTokens":       30,
@@ -378,7 +432,7 @@ func TestFakeOrchestratorAppServer(t *testing.T) {
 					},
 				},
 			})
-			writeFakeOrchestratorJSON(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread-1", "turnId": "turn-1"}})
+			writeFakeOrchestratorJSON(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread-1", "turnId": turnID}})
 		default:
 			writeFakeOrchestratorJSON(map[string]any{"id": id, "error": map[string]any{"code": -32601, "message": "unknown method " + method}})
 		}
@@ -396,6 +450,29 @@ func fakeOrchestratorTurnInputText(params map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func traceFakeOrchestratorMethod(method string) {
+	tracePath := os.Getenv("SYMPHONY_FAKE_ORCHESTRATOR_TRACE")
+	if tracePath == "" {
+		return
+	}
+	f, err := os.OpenFile(tracePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		os.Exit(2)
+	}
+	defer f.Close()
+	fmt.Fprintln(f, method)
+}
+
+func countTraceLines(lines []string, want string) int {
+	count := 0
+	for _, line := range lines {
+		if line == want {
+			count++
+		}
+	}
+	return count
 }
 
 func writeFakeOrchestratorJSON(value any) {
@@ -1402,6 +1479,22 @@ type recordingTracker struct {
 	fetchIssueStateIDs [][]string
 	createdIssues      []tracker.IssueCreation
 	createdIssue       tracker.Issue
+}
+
+type stateOnlyTracker struct {
+	issueStatesByID []tracker.Issue
+}
+
+func (s *stateOnlyTracker) FetchCandidateIssues(context.Context) ([]tracker.Issue, error) {
+	return nil, nil
+}
+
+func (s *stateOnlyTracker) FetchIssuesByStates(context.Context, []string) ([]tracker.Issue, error) {
+	return nil, nil
+}
+
+func (s *stateOnlyTracker) FetchIssueStatesByIDs(context.Context, []string) ([]tracker.Issue, error) {
+	return s.issueStatesByID, nil
 }
 
 func (r *recordingTracker) FetchCandidateIssues(context.Context) ([]tracker.Issue, error) {
