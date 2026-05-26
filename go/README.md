@@ -458,7 +458,6 @@ make all
 
 ## Current limitations
 
-- Codex app-server execution is opt-in and currently supports one synchronous turn at a time per
-  issue run.
+- Codex app-server execution is opt-in and keeps one synchronous app-server session per issue run.
 - `WORKFLOW.md` is read once at startup; SPEC §6.2 dynamic reload is not implemented yet. See
   [`docs/hot_reload.md`](docs/hot_reload.md) for the proposed conformance path.
